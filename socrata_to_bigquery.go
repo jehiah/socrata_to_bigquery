@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -78,7 +81,7 @@ func main() {
 		log.Fatal("missing --socrata-dataset")
 	}
 
-	var token string
+	token := os.Getenv("SOCRATA_APP_TOKEN")
 	sodareq := soda.NewGetRequest(*socrataDataset, token)
 	md, err := sodareq.Metadata.Get()
 	if err != nil {
@@ -126,31 +129,68 @@ func main() {
 	}
 	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
 
-	// check table?
-
 	client, err := storage.NewClient(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 	bkt := client.Bucket(*bucketName)
-	log.Printf("%#v", client)
 
 	// bigquery so we where we left off
 	// create if needed
-
-	// query socrata
-	// stream to a google storage file
-	obj := bkt.Object("tempfilename")
-	w := obj.NewWriter(ctx)
-	bytes, err := io.Copy(w, strings.NewReader(``))
+	sodareq.Query.Limit = 10
+	sodareq.Format = "csv"
+	req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("read %d bytes", bytes)
+	req.URL.RawQuery = sodareq.URLValues().Encode()
+	req.Header.Set("X-App-Token", token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if resp.StatusCode >= 400 {
+		log.Fatal("got unexpected response %d", resp.StatusCode)
+	}
+	// query socrata
+	// stream to a google storage file
+	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), md.ID+".csv"))
+	log.Printf("streaming GS %s", obj.ObjectName())
+	w := obj.NewWriter(ctx)
+	w.ObjectAttrs.ContentType = "text/csv"
+	bytes, err := io.Copy(w, resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("wrote %d bytes to Google Storage", bytes)
 	err = w.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
+	resp.Body.Close()
 
 	// load into bigquery
+
+	gcsRef := bigquery.NewGCSReference(fmt.Sprintf("gs://%s/%s", *bucketName, obj.ObjectName()))
+	// gcsRef.MaxBadRecords
+	gcsRef.SourceFormat = bigquery.CSV
+	// gcsRef.IgnoreUnknownValues = true
+	gcsRef.SkipLeadingRows = 1
+	// gcsRef.AllowQuotedNewlines = AllowNewLines
+
+	loader := bqTable.LoaderFrom(gcsRef)
+	loader.WriteDisposition = bigquery.WriteAppend
+
+	loadJob, err := loader.Run(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("BigQuery import running job %s", loadJob.ID())
+	status, err := loadJob.Wait(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err = status.Err(); err != nil {
+		log.Fatal(err)
+	}
 }
