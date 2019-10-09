@@ -82,10 +82,29 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 		for i, f := range targetSchema {
 			switch f.Type {
 			case bigquery.DateFieldType:
-				// convert
 				switch sourceSchema[i].DataTypeName {
 				case "text":
-					d, err := time.Parse("2006/01/02", m[f.Name].(string))
+					var s string
+					switch ss := m[f.Name].(type) {
+					case string:
+						s = ss
+					case nil:
+						m[f.Name] = nil
+						continue
+					default:
+						return rows, fmt.Errorf("error row %d casting %T as string %#v", rows, m[f.Name], m[f.Name])
+					}
+					if s == "" {
+						m[f.Name] = nil
+						continue
+					}
+					var d time.Time
+					for _, timeFormat := range []string{"01/02/2006", "2006/01/02"} {
+						d, err = time.Parse(timeFormat, s)
+						if err == nil {
+							break
+						}
+					}
 					if err != nil {
 						return rows, fmt.Errorf("error %s parsing %q", err, m[f.Name])
 					}
@@ -100,7 +119,6 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 		}
 		log.Printf("[%d] %#v", rows, m)
 		enc.Encode(m)
-
 	}
 	_, err = dec.Token()
 	if err != nil {
@@ -150,6 +168,7 @@ func main() {
 	projectID := flag.String("bq-project-id", "", "")
 	datasetName := flag.String("bq-dataset", "", "bigquery dataset name")
 	partitionColumn := flag.String("partition-column", "", "Date column to partition BQ table on")
+	limit := flag.Int("limit", 100, "limit")
 	var schemaOverride StringArray
 	flag.Var(&schemaOverride, "schema-override", "override a field schema field:type (may be given multiple times)")
 	flag.Parse()
@@ -214,14 +233,15 @@ func main() {
 
 	// bigquery so we where we left off
 	// create if needed
-	sodareq.Query.Limit = 10
-	sodareq.Format = "csv"
+	sodareq.Query.Limit = uint(*limit)
+	sodareq.Format = "json"
 	req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	req.URL.RawQuery = sodareq.URLValues().Encode()
 	req.Header.Set("X-App-Token", token)
+	log.Printf("streaming from %s", req.URL)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Fatal(err)
@@ -232,19 +252,19 @@ func main() {
 	// query socrata
 	// stream to a google storage file
 	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), md.ID+".json"))
-	log.Printf("streaming GS %s", obj.ObjectName())
+	log.Printf("streaming GS gs://%s/%s", *bucketName, obj.ObjectName())
 	w := obj.NewWriter(ctx)
 	w.ObjectAttrs.ContentType = "application/json"
-	rows, err := Transform(w, resp.Body, md.Columns, tmd.Schema)
-	if err != nil {
-		log.Fatal(err)
-	}
+	rows, transformErr := Transform(w, resp.Body, md.Columns, tmd.Schema)
 	log.Printf("wrote %d rows to Google Storage", rows)
 	err = w.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
 	resp.Body.Close()
+	if transformErr != nil {
+		log.Fatal(transformErr)
+	}
 
 	// load into bigquery
 
@@ -252,7 +272,7 @@ func main() {
 	// gcsRef.MaxBadRecords
 	gcsRef.SourceFormat = bigquery.JSON
 	// gcsRef.IgnoreUnknownValues = true
-	gcsRef.SkipLeadingRows = 1
+	// gcsRef.SkipLeadingRows = 1
 	// gcsRef.AllowQuotedNewlines = AllowNewLines
 
 	loader := bqTable.LoaderFrom(gcsRef)
@@ -264,6 +284,7 @@ func main() {
 	}
 	log.Printf("BigQuery import running job %s", loadJob.ID())
 	status, err := loadJob.Wait(ctx)
+	log.Printf("BigQuery import job %s done", loadJob.ID())
 	if err != nil {
 		log.Fatal(err)
 	}
