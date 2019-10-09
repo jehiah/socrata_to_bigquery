@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +19,17 @@ import (
 	"google.golang.org/api/googleapi"
 )
 
+type StringArray []string
+
+func (a *StringArray) Set(s string) error {
+	*a = append(*a, s)
+	return nil
+}
+
+func (a *StringArray) String() string {
+	return strings.Join(*a, ",")
+}
+
 func LogSocrataSchema(c []soda.Column) {
 	for i, cc := range c {
 		fmt.Printf("[%d] %q (%s) %s %#v\n", i, cc.FieldName, cc.DataTypeName, cc.Name, cc)
@@ -25,7 +37,7 @@ func LogSocrataSchema(c []soda.Column) {
 }
 func DataTypeNameToFieldType(t string) bigquery.FieldType {
 	switch t {
-	case "text":
+	case "text", "url":
 		return bigquery.StringFieldType
 	case "number":
 		return bigquery.NumericFieldType
@@ -39,7 +51,65 @@ func ToTableName(s string) string {
 	return strings.ReplaceAll(s, "-", "_")
 }
 
-func BQTableMetadata(s soda.Metadata, partitionField string) *bigquery.TableMetadata {
+func ParseSchemaOverride(s []string) map[string]bigquery.FieldType {
+	d := make(map[string]bigquery.FieldType)
+	for _, ss := range s {
+		c := strings.SplitN(ss, ":", 2)
+		d[c[0]] = bigquery.FieldType(c[1])
+	}
+	return d
+}
+
+func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchema bigquery.Schema) (int64, error) {
+	dec := json.NewDecoder(r)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+
+	// read open bracket
+	var rows int64
+	_, err := dec.Token()
+	if err != nil {
+		return rows, fmt.Errorf("initial token; rows %d %s", rows, err)
+	}
+	for dec.More() {
+		rows += 1
+		var m map[string]interface{}
+		err := dec.Decode(&m)
+		if err != nil {
+			return rows, fmt.Errorf("row %d %s", rows, err)
+		}
+		// transform
+		for i, f := range targetSchema {
+			switch f.Type {
+			case bigquery.DateFieldType:
+				// convert
+				switch sourceSchema[i].DataTypeName {
+				case "text":
+					d, err := time.Parse("2006/01/02", m[f.Name].(string))
+					if err != nil {
+						return rows, fmt.Errorf("error %s parsing %q", err, m[f.Name])
+					}
+					m[f.Name] = d.Format("2006-01-02")
+				}
+			case bigquery.StringFieldType:
+				switch sourceSchema[i].DataTypeName {
+				case "url":
+					m[f.Name] = m[f.Name].(map[string]interface{})["url"]
+				}
+			}
+		}
+		log.Printf("[%d] %#v", rows, m)
+		enc.Encode(m)
+
+	}
+	_, err = dec.Token()
+	if err != nil {
+		return rows, err
+	}
+	return rows, nil
+}
+
+func BQTableMetadata(s soda.Metadata, partitionField string, schemaOverride map[string]bigquery.FieldType) *bigquery.TableMetadata {
 	var schema bigquery.Schema
 	var foundRequired bool
 	for _, c := range s.Columns {
@@ -48,10 +118,14 @@ func BQTableMetadata(s soda.Metadata, partitionField string) *bigquery.TableMeta
 			required = true
 			foundRequired = true
 		}
+		t := DataTypeNameToFieldType(c.DataTypeName)
+		if tt, ok := schemaOverride[c.FieldName]; ok {
+			t = tt
+		}
 		schema = append(schema, &bigquery.FieldSchema{
 			Name:        c.FieldName,
 			Description: c.Name,
-			Type:        DataTypeNameToFieldType(c.DataTypeName),
+			Type:        t,
 			Required:    required,
 		})
 	}
@@ -70,11 +144,14 @@ func BQTableMetadata(s soda.Metadata, partitionField string) *bigquery.TableMeta
 }
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 	socrataDataset := flag.String("socrata-dataset", "", "the URL to the socrata dataset")
 	bucketName := flag.String("gs-bucket", "", "google storage bucket name")
 	projectID := flag.String("bq-project-id", "", "")
 	datasetName := flag.String("bq-dataset", "", "bigquery dataset name")
 	partitionColumn := flag.String("partition-column", "", "Date column to partition BQ table on")
+	var schemaOverride StringArray
+	flag.Var(&schemaOverride, "schema-override", "override a field schema field:type (may be given multiple times)")
 	flag.Parse()
 
 	if *socrataDataset == "" {
@@ -114,7 +191,7 @@ func main() {
 		if e, ok := err.(*googleapi.Error); ok {
 			if e.Code == 404 {
 				log.Printf("Auto-creating table %s", e.Message)
-				if err := bqTable.Create(ctx, BQTableMetadata(*md, *partitionColumn)); err != nil {
+				if err := bqTable.Create(ctx, BQTableMetadata(*md, *partitionColumn, ParseSchemaOverride(schemaOverride))); err != nil {
 					log.Fatal(err)
 				}
 				tmd, err = bqTable.Metadata(ctx)
@@ -150,19 +227,19 @@ func main() {
 		log.Fatal(err)
 	}
 	if resp.StatusCode >= 400 {
-		log.Fatal("got unexpected response %d", resp.StatusCode)
+		log.Fatalf("got unexpected response %d", resp.StatusCode)
 	}
 	// query socrata
 	// stream to a google storage file
-	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), md.ID+".csv"))
+	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), md.ID+".json"))
 	log.Printf("streaming GS %s", obj.ObjectName())
 	w := obj.NewWriter(ctx)
-	w.ObjectAttrs.ContentType = "text/csv"
-	bytes, err := io.Copy(w, resp.Body)
+	w.ObjectAttrs.ContentType = "application/json"
+	rows, err := Transform(w, resp.Body, md.Columns, tmd.Schema)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("wrote %d bytes to Google Storage", bytes)
+	log.Printf("wrote %d rows to Google Storage", rows)
 	err = w.Close()
 	if err != nil {
 		log.Fatal(err)
@@ -173,7 +250,7 @@ func main() {
 
 	gcsRef := bigquery.NewGCSReference(fmt.Sprintf("gs://%s/%s", *bucketName, obj.ObjectName()))
 	// gcsRef.MaxBadRecords
-	gcsRef.SourceFormat = bigquery.CSV
+	gcsRef.SourceFormat = bigquery.JSON
 	// gcsRef.IgnoreUnknownValues = true
 	gcsRef.SkipLeadingRows = 1
 	// gcsRef.AllowQuotedNewlines = AllowNewLines
