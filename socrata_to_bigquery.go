@@ -83,6 +83,7 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 			return rows, fmt.Errorf("row %d %s", rows, err)
 		}
 		// transform
+	transformLoop:
 		for i, f := range targetSchema {
 			switch f.Name {
 			case "_id", "_created_at", "_updated_at", "_version":
@@ -117,6 +118,12 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 						if err == nil {
 							break
 						}
+						// if the format is good, but the date is not
+						if strings.Contains(err.Error(), "out of range") {
+							log.Printf("skipping row with invalid timestamp %s %#v", err, m)
+							m = nil
+							break transformLoop
+						}
 					}
 					if err != nil {
 						return rows, fmt.Errorf("error %s parsing %q", err, m[f.Name])
@@ -131,7 +138,9 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 			}
 		}
 		// log.Printf("[%d] %#v", rows, m)
-		enc.Encode(m)
+		if m != nil {
+			enc.Encode(m)
+		}
 	}
 	_, err = dec.Token()
 	if err != nil {
