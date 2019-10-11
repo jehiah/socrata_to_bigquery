@@ -1,11 +1,10 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -63,92 +62,6 @@ func ParseSchemaOverride(s []string) map[string]bigquery.FieldType {
 	return d
 }
 
-// Transform converts a JSON export from Socrata to a JSON valid for the target schema on BigQuery
-func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchema bigquery.Schema) (int64, error) {
-	dec := json.NewDecoder(r)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-
-	// read open bracket
-	var rows int64
-	_, err := dec.Token()
-	if err != nil {
-		return rows, fmt.Errorf("initial token; rows %d %s", rows, err)
-	}
-	for dec.More() {
-		rows += 1
-		var m map[string]interface{}
-		err := dec.Decode(&m)
-		if err != nil {
-			return rows, fmt.Errorf("row %d %s", rows, err)
-		}
-		// transform
-	transformLoop:
-		for i, f := range targetSchema {
-			switch f.Name {
-			case "_id", "_created_at", "_updated_at", "_version":
-				// move the field from ":${field}" to "_${field}"
-				k := ":" + f.Name[1:]
-				m[f.Name] = m[k]
-				delete(m, k)
-				continue
-			}
-			sourceDataType := sourceSchema[i-4].DataTypeName
-			switch f.Type {
-			case bigquery.DateFieldType:
-				switch sourceDataType {
-				case "text":
-					var s string
-					switch ss := m[f.Name].(type) {
-					case string:
-						s = ss
-					case nil:
-						m[f.Name] = nil
-						continue
-					default:
-						return rows, fmt.Errorf("error row %d casting %T as string %#v", rows, m[f.Name], m[f.Name])
-					}
-					if s == "" {
-						m[f.Name] = nil
-						continue
-					}
-					var d time.Time
-					for _, timeFormat := range []string{"01/02/2006", "2006/01/02"} {
-						d, err = time.Parse(timeFormat, s)
-						if err == nil {
-							break
-						}
-						// if the format is good, but the date is not
-						if strings.Contains(err.Error(), "out of range") {
-							log.Printf("skipping row with invalid timestamp %s %#v", err, m)
-							m = nil
-							break transformLoop
-						}
-					}
-					if err != nil {
-						return rows, fmt.Errorf("error %s parsing %q", err, m[f.Name])
-					}
-					m[f.Name] = d.Format("2006-01-02")
-				}
-			case bigquery.StringFieldType:
-				switch sourceDataType {
-				case "url":
-					m[f.Name] = m[f.Name].(map[string]interface{})["url"]
-				}
-			}
-		}
-		// log.Printf("[%d] %#v", rows, m)
-		if m != nil {
-			enc.Encode(m)
-		}
-	}
-	_, err = dec.Token()
-	if err != nil {
-		return rows, err
-	}
-	return rows, nil
-}
-
 func BQTableMetadata(s soda.Metadata, partitionField string, schemaOverride map[string]bigquery.FieldType) *bigquery.TableMetadata {
 	schema := bigquery.Schema{
 		&bigquery.FieldSchema{
@@ -190,18 +103,22 @@ func BQTableMetadata(s soda.Metadata, partitionField string, schemaOverride map[
 			Required:    required,
 		})
 	}
-	if !foundRequired {
+	if !foundRequired && partitionField != "" {
 		log.Panicf("partition column %q not detected", partitionField)
 	}
-	return &bigquery.TableMetadata{
-		Name:                   ToTableName(s.ID, s.Name),
-		Description:            s.Name,
-		Schema:                 schema,
-		RequirePartitionFilter: true,
-		TimePartitioning: &bigquery.TimePartitioning{
-			Field: partitionField,
-		},
+
+	m := &bigquery.TableMetadata{
+		Name:        ToTableName(s.ID, s.Name),
+		Description: s.Name,
+		Schema:      schema,
 	}
+	if partitionField != "" {
+		m.RequirePartitionFilter = true
+		m.TimePartitioning = &bigquery.TimePartitioning{
+			Field: partitionField,
+		}
+	}
+	return m
 }
 
 func main() {
@@ -298,12 +215,18 @@ func main() {
 	}
 	// query socrata
 	// stream to a google storage file
-	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), md.ID+".json"))
+	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), md.ID+".json.gz"))
 	log.Printf("streaming to gs://%s/%s", *bucketName, obj.ObjectName())
 	w := obj.NewWriter(ctx)
 	w.ObjectAttrs.ContentType = "application/json"
-	rows, transformErr := Transform(w, resp.Body, md.Columns, tmd.Schema)
+	w.ObjectAttrs.ContentEncoding = "gzip"
+	gw := gzip.NewWriter(w)
+	rows, transformErr := Transform(gw, resp.Body, md.Columns, tmd.Schema)
 	log.Printf("wrote %d rows to Google Storage", rows)
+	err = gw.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
 	err = w.Close()
 	if err != nil {
 		log.Fatal(err)
