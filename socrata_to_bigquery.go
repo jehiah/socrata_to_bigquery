@@ -16,6 +16,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/SebastiaanKlippert/go-soda"
 	"google.golang.org/api/googleapi"
+	"google.golang.org/api/iterator"
 )
 
 type StringArray []string
@@ -186,6 +187,37 @@ func main() {
 		log.Fatalf("Error fetching BigQuery Table %s.%s %s", dmd.FullID, md.ID, err)
 	}
 	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
+	
+	
+	var minCreatedDate time.Time
+	if *where == ""  {
+		
+		// automatically generate a where clause
+		tn := fmt.Sprintf("`%s.%s.%s`", *projectID, *datasetName, tmd.Name)
+		q := bqclient.Query(`SELECT max(_created_at) as created FROM ` + tn)
+		it, err := q.Read(ctx)
+		if err != nil {
+			log.Fatal(err)
+		}
+		type Result struct {
+		    Created  time.Time
+		}
+		var r Result
+		for {
+		    err := it.Next(&r)
+		    if err == iterator.Done {
+		        break
+		    }
+		    if err != nil {
+				log.Fatal(err)
+		    }
+		}
+		if !r.Created.IsZero() {
+			minCreatedDate = r.Created
+			*where = fmt.Sprintf(":created_at >= '%s'", r.Created.Add(time.Second).Format(time.RFC3339))
+			log.Printf("using automatic where clause %s", *where)
+		}
+	}
 
 	client, err := storage.NewClient(ctx)
 	if err != nil {
@@ -221,7 +253,7 @@ func main() {
 	w.ObjectAttrs.ContentType = "application/json"
 	w.ObjectAttrs.ContentEncoding = "gzip"
 	gw := gzip.NewWriter(w)
-	rows, transformErr := Transform(gw, resp.Body, md.Columns, tmd.Schema)
+	rows, transformErr := Transform(gw, resp.Body, md.Columns, tmd.Schema, minCreatedDate)
 	log.Printf("wrote %d rows to Google Storage", rows)
 	err = gw.Close()
 	if err != nil {
@@ -237,13 +269,8 @@ func main() {
 	}
 
 	// load into bigquery
-
 	gcsRef := bigquery.NewGCSReference(fmt.Sprintf("gs://%s/%s", *bucketName, obj.ObjectName()))
-	// gcsRef.MaxBadRecords
 	gcsRef.SourceFormat = bigquery.JSON
-	// gcsRef.IgnoreUnknownValues = true
-	// gcsRef.SkipLeadingRows = 1
-	// gcsRef.AllowQuotedNewlines = AllowNewLines
 
 	loader := bqTable.LoaderFrom(gcsRef)
 	loader.WriteDisposition = bigquery.WriteAppend

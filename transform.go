@@ -13,7 +13,7 @@ import (
 )
 
 // Transform converts a JSON export from Socrata to a JSON valid for the target schema on BigQuery
-func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchema bigquery.Schema) (int64, error) {
+func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchema bigquery.Schema, minCreated time.Time) (int64, error) {
 	dec := json.NewDecoder(r)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
@@ -31,7 +31,7 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 		if err != nil {
 			return rows, fmt.Errorf("row %d %s", rows, err)
 		}
-		mm, err := TransformOne(m, sourceSchema, targetSchema)
+		mm, err := TransformOne(m, sourceSchema, targetSchema, minCreated)
 		if err != nil {
 			log.Printf("%s row:%d data:%#v", err, rows, m)
 			continue
@@ -47,11 +47,23 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 	return rows, nil
 }
 
-func TransformOne(m map[string]interface{}, sourceSchema []soda.Column, targetSchema bigquery.Schema) (map[string]interface{}, error) {
+func TransformOne(m map[string]interface{}, sourceSchema []soda.Column, targetSchema bigquery.Schema, minCreated time.Time) (map[string]interface{}, error) {
 	var offset int
 	for i, f := range targetSchema {
 		switch f.Name {
-		case "_id", "_created_at", "_updated_at", "_version":
+		case "_created_at":
+			if !minCreated.IsZero() {
+				v := m[":" + f.Name[1:]]
+				ts, err := time.Parse(time.RFC3339, v.(string))
+				if err != nil {
+					return nil, fmt.Errorf("invalid %s time %s", f.Name, err)
+				}
+				if ts.Before(minCreated) {
+					return nil, fmt.Errorf("record :created_at %s is before minimum %s", v, minCreated.Format(time.RFC3339))
+				}
+			}
+			fallthrough
+		case "_id", "_updated_at", "_version":
 			offset += 1
 			// move the field from ":${field}" to "_${field}"
 			k := ":" + f.Name[1:]
@@ -63,6 +75,12 @@ func TransformOne(m map[string]interface{}, sourceSchema []soda.Column, targetSc
 		switch f.Type {
 		case bigquery.DateFieldType:
 			switch sourceDataType {
+			case "calendar_date":
+				switch ss := m[f.Name].(type) {
+				// example: 2019-06-28T00:00:00.000
+				case string:
+					m[f.Name] = strings.SplitN(ss, "T", 2)[0]
+				}
 			case "text":
 				var s string
 				switch ss := m[f.Name].(type) {

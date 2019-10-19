@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/bigquery"
 	"github.com/SebastiaanKlippert/go-soda"
@@ -39,7 +40,7 @@ func TestTransform(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.in), &m); err != nil {
 				t.Fatal(err)
 			}
-			got, err := TransformOne(m, tc.sourceSchema, tc.targetSchema)
+			got, err := TransformOne(m, tc.sourceSchema, tc.targetSchema, time.Time{})
 			if tc.err != "" {
 				if err == nil || err.Error() != tc.err {
 					t.Fatalf("expected error %s got %s", tc.err, err)
