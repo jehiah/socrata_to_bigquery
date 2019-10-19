@@ -53,7 +53,7 @@ func TransformOne(m map[string]interface{}, sourceSchema []soda.Column, targetSc
 		switch f.Name {
 		case "_created_at":
 			if !minCreated.IsZero() {
-				v := m[":" + f.Name[1:]]
+				v := m[":"+f.Name[1:]]
 				ts, err := time.Parse(time.RFC3339, v.(string))
 				if err != nil {
 					return nil, fmt.Errorf("invalid %s time %s", f.Name, err)
@@ -73,6 +73,23 @@ func TransformOne(m map[string]interface{}, sourceSchema []soda.Column, targetSc
 		}
 		sourceDataType := sourceSchema[i-offset].DataTypeName
 		switch f.Type {
+		case bigquery.GeographyFieldType:
+
+			switch sourceDataType {
+			case "point":
+				var err error
+				geo, err := ToGeoJSON(m[f.Name])
+				if err != nil {
+					return nil, err
+				}
+				if geo != "" {
+					m[f.Name] = geo
+				} else {
+					m[f.Name] = nil
+				}
+			default:
+				return nil, fmt.Errorf("unable to convert point of type %s (%#v) to %s", sourceDataType, m[f.Name], bigquery.GeographyFieldType)
+			}
 		case bigquery.DateFieldType:
 			switch sourceDataType {
 			case "calendar_date":
@@ -130,4 +147,13 @@ func TransformOne(m map[string]interface{}, sourceSchema []soda.Column, targetSc
 		}
 	}
 	return m, nil
+}
+
+func ToGeoJSON(v interface{}) (string, error) {
+	// {"type":"Point","coordinates":[-73.96481,40.633247]}
+	if v == nil {
+		return "", nil
+	}
+	b, err := json.Marshal(v)
+	return string(b), err
 }

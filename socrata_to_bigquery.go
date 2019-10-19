@@ -44,6 +44,8 @@ func DataTypeNameToFieldType(t string) bigquery.FieldType {
 		return bigquery.NumericFieldType
 	case "calendar_date":
 		return bigquery.DateFieldType
+	case "point":
+		return bigquery.GeographyFieldType
 	}
 	panic(fmt.Sprintf("unknown type %q", t))
 }
@@ -83,7 +85,7 @@ func BQTableMetadata(s soda.Metadata, partitionField string, schemaOverride map[
 		&bigquery.FieldSchema{
 			Name:     "_version",
 			Type:     bigquery.StringFieldType,
-			Required: true,
+			Required: false,
 		},
 	}
 	var foundRequired bool
@@ -129,7 +131,7 @@ func main() {
 	projectID := flag.String("bq-project-id", "", "")
 	datasetName := flag.String("bq-dataset", "", "bigquery dataset name")
 	partitionColumn := flag.String("partition-column", "", "Date column to partition BQ table on")
-	limit := flag.Int("limit", 100, "limit")
+	limit := flag.Int("limit", 100000000, "limit")
 	where := flag.String("where", "", "$where clause")
 	var schemaOverride StringArray
 	flag.Var(&schemaOverride, "schema-override", "override a field schema field:type (may be given multiple times)")
@@ -187,11 +189,10 @@ func main() {
 		log.Fatalf("Error fetching BigQuery Table %s.%s %s", dmd.FullID, md.ID, err)
 	}
 	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
-	
-	
+
 	var minCreatedDate time.Time
-	if *where == ""  {
-		
+	if *where == "" {
+
 		// automatically generate a where clause
 		tn := fmt.Sprintf("`%s.%s.%s`", *projectID, *datasetName, tmd.Name)
 		q := bqclient.Query(`SELECT max(_created_at) as created FROM ` + tn)
@@ -200,17 +201,20 @@ func main() {
 			log.Fatal(err)
 		}
 		type Result struct {
-		    Created  time.Time
+			Created time.Time
 		}
 		var r Result
 		for {
-		    err := it.Next(&r)
-		    if err == iterator.Done {
-		        break
-		    }
-		    if err != nil {
+			err := it.Next(&r)
+			if err == iterator.Done {
+				break
+			}
+			if err.Error() == "bigquery: NULL values cannot be read into structs" {
+				break
+			}
+			if err != nil {
 				log.Fatal(err)
-		    }
+			}
 		}
 		if !r.Created.IsZero() {
 			minCreatedDate = r.Created
