@@ -131,6 +131,7 @@ func main() {
 	projectID := flag.String("bq-project-id", "", "")
 	datasetName := flag.String("bq-dataset", "", "bigquery dataset name")
 	partitionColumn := flag.String("partition-column", "", "Date column to partition BQ table on")
+	quiet := flag.Bool("quiet", false, "disable progress output")
 	limit := flag.Int("limit", 100000000, "limit")
 	where := flag.String("where", "", "$where clause")
 	var schemaOverride StringArray
@@ -209,7 +210,7 @@ func main() {
 			if err == iterator.Done {
 				break
 			}
-			if err.Error() == "bigquery: NULL values cannot be read into structs" {
+			if err != nil && err.Error() == "bigquery: NULL values cannot be read into structs" {
 				break
 			}
 			if err != nil {
@@ -257,7 +258,7 @@ func main() {
 	w.ObjectAttrs.ContentType = "application/json"
 	w.ObjectAttrs.ContentEncoding = "gzip"
 	gw := gzip.NewWriter(w)
-	rows, transformErr := Transform(gw, resp.Body, md.Columns, tmd.Schema, minCreatedDate)
+	rows, transformErr := Transform(gw, resp.Body, md.Columns, tmd.Schema, minCreatedDate, *quiet)
 	log.Printf("wrote %d rows to Google Storage", rows)
 	err = gw.Close()
 	if err != nil {
@@ -271,29 +272,31 @@ func main() {
 	if transformErr != nil {
 		log.Fatal(transformErr)
 	}
+	if rows != 0 {
+		// load into bigquery
+		gcsRef := bigquery.NewGCSReference(fmt.Sprintf("gs://%s/%s", *bucketName, obj.ObjectName()))
+		gcsRef.SourceFormat = bigquery.JSON
 
-	// load into bigquery
-	gcsRef := bigquery.NewGCSReference(fmt.Sprintf("gs://%s/%s", *bucketName, obj.ObjectName()))
-	gcsRef.SourceFormat = bigquery.JSON
+		loader := bqTable.LoaderFrom(gcsRef)
+		loader.WriteDisposition = bigquery.WriteAppend
 
-	loader := bqTable.LoaderFrom(gcsRef)
-	loader.WriteDisposition = bigquery.WriteAppend
-
-	loadJob, err := loader.Run(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("BigQuery import running job %s", loadJob.ID())
-	status, err := loadJob.Wait(ctx)
-	log.Printf("BigQuery import job %s done", loadJob.ID())
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err = status.Err(); err != nil {
-		log.Fatal(err)
+		loadJob, err := loader.Run(ctx)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("BigQuery import running job %s", loadJob.ID())
+		status, err := loadJob.Wait(ctx)
+		log.Printf("BigQuery import job %s done", loadJob.ID())
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err = status.Err(); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	// cleanup google storage
+	log.Printf("removing temp file gs://%s/%s", *bucketName, obj.ObjectName())
 	if err = obj.Delete(ctx); err != nil {
 		log.Fatal(err)
 	}

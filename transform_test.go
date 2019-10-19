@@ -10,7 +10,7 @@ import (
 	"github.com/SebastiaanKlippert/go-soda"
 )
 
-func TestTransform(t *testing.T) {
+func TestTransformOne(t *testing.T) {
 	type testCase struct {
 		in           string
 		sourceSchema []soda.Column

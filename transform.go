@@ -13,7 +13,7 @@ import (
 )
 
 // Transform converts a JSON export from Socrata to a JSON valid for the target schema on BigQuery
-func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchema bigquery.Schema, minCreated time.Time) (int64, error) {
+func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchema bigquery.Schema, minCreated time.Time, quiet bool) (int64, error) {
 	dec := json.NewDecoder(r)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
@@ -24,6 +24,7 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 	if err != nil {
 		return rows, fmt.Errorf("initial token; rows %d %s", rows, err)
 	}
+	start := time.Now()
 	for dec.More() {
 		rows += 1
 		var m map[string]interface{}
@@ -39,6 +40,12 @@ func Transform(w io.Writer, r io.Reader, sourceSchema []soda.Column, targetSchem
 		if mm != nil {
 			enc.Encode(mm)
 		}
+		if !quiet && rows%100000 == 0 {
+			log.Printf("processed %d rows (%s)", rows, time.Since(start).Truncate(time.Second))
+		}
+	}
+	if !quiet && rows%100000 != 0 {
+		log.Printf("processed %d rows (%s)", rows, time.Since(start).Truncate(time.Second))
 	}
 	_, err = dec.Token()
 	if err != nil {
