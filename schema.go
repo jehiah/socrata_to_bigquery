@@ -10,13 +10,13 @@ import (
 
 // SchemaField represents a toml record which configures how data will be transformed from Socrata to BigQuery
 type SchemaField struct {
-	SourceField   string
-	Description   string             `omitempty`
-	Type          bigquery.FieldType `comment:"The Field Type in BigQuery"`
-	TimeFormat    string             `comment:"the time.Parse format string" omitempty`
-	Required      bool
-	OnError       string `comment:"SKIP | ERROR" omitempty`
-	ExampleValues string `commented:"true" omitempty`
+	SourceField   string	`toml:"source_field"`
+	Description   string             `toml:"description,omitempty"`
+	Type          bigquery.FieldType `toml:"bigquery_type"`
+	TimeFormat    string             `comment:"the time.Parse format string" toml:"time_format,omitempty"`
+	Required      bool `toml:"required"`
+	OnError       string `comment:"SKIP | ERROR" toml:"on_error,omitempty"`
+	ExampleValues string `commented:"true" toml:"examples,omitempty"`
 }
 type TableSchema map[string]SchemaField
 
@@ -45,7 +45,7 @@ func NewConfig(url string, md soda.Metadata) Config {
 		Dataset: url,
 		BigQuery: BigQuery{
 			TableName:   ToTableName(md.ID, md.Name),
-			Description: md.Name,
+			Description: strings.TrimSpace(md.Name),
 		},
 	}
 }
@@ -100,7 +100,7 @@ func NewSchema(s soda.Metadata) TableSchema {
 			Type:        fieldType,
 			TimeFormat:  timeFormat,
 			Required:    false,
-			Description: c.Name,
+			Description: strings.TrimSpace(c.Name),
 		}
 	}
 	return t
