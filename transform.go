@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
-	"github.com/SebastiaanKlippert/go-soda"
+	soda "github.com/SebastiaanKlippert/go-soda"
 )
 
 // Transform converts a JSON export from Socrata to a JSON valid for the target schema on BigQuery
@@ -158,6 +158,7 @@ func TransformOne(m map[string]interface{}, sourceSchema []soda.Column, targetSc
 
 func ToGeoJSON(v interface{}) (string, error) {
 	// {"type":"Point","coordinates":[-73.96481,40.633247]}
+	// TODO: validate that this is a simple geo; Point, LineString, etc
 	if v == nil {
 		return "", nil
 	}

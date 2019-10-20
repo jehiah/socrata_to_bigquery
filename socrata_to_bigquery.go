@@ -9,133 +9,88 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/storage"
-	"github.com/SebastiaanKlippert/go-soda"
+	soda "github.com/SebastiaanKlippert/go-soda"
+	toml "github.com/pelletier/go-toml"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 )
 
-type StringArray []string
+// m := &bigquery.TableMetadata{
+// 	Name:        ToTableName(s.ID, s.Name),
+// 	Description: s.Name,
+// 	Schema:      schema,
+// }
 
-func (a *StringArray) Set(s string) error {
-	*a = append(*a, s)
-	return nil
-}
+func initDataset(args []string) {
+	initFlagSet := flag.NewFlagSet("init", flag.ExitOnError)
+	dataset := initFlagSet.String("dataset", "", "The URL to the socrata dataset")
+	token := initFlagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
+	debug := initFlagSet.Bool("debug", false, "show debug output")
+	initFlagSet.Parse(args)
 
-func (a *StringArray) String() string {
-	return strings.Join(*a, ",")
-}
-
-func LogSocrataSchema(c []soda.Column) {
-	for i, cc := range c {
-		fmt.Printf("[%d] %q (%s) %s %#v\n", i, cc.FieldName, cc.DataTypeName, cc.Name, cc)
+	if *dataset == "" {
+		log.Fatal("missing --dataset")
 	}
-}
-
-func DataTypeNameToFieldType(t string) bigquery.FieldType {
-	switch t {
-	case "text", "url":
-		return bigquery.StringFieldType
-	case "number":
-		return bigquery.NumericFieldType
-	case "calendar_date":
-		return bigquery.DateFieldType
-	case "point":
-		return bigquery.GeographyFieldType
+	if *token == "" {
+		*token = os.Getenv("SOCRATA_APP_TOKEN")
 	}
-	panic(fmt.Sprintf("unknown type %q", t))
-}
-
-func ToTableName(id, name string) string {
-	r := strings.NewReplacer("-", "_", " ", "_")
-	return r.Replace(id + "-" + strings.ToLower(name))
-}
-
-// parses values of the format "field_name:BIGQUERY_FIELD_TYPE" i.e. "my_date_col:DATE"
-func ParseSchemaOverride(s []string) map[string]bigquery.FieldType {
-	d := make(map[string]bigquery.FieldType)
-	for _, ss := range s {
-		c := strings.SplitN(ss, ":", 2)
-		d[c[0]] = bigquery.FieldType(c[1])
-	}
-	return d
-}
-
-func BQTableMetadata(s soda.Metadata, partitionField string, schemaOverride map[string]bigquery.FieldType) *bigquery.TableMetadata {
-	schema := bigquery.Schema{
-		&bigquery.FieldSchema{
-			Name:     "_id",
-			Type:     bigquery.StringFieldType,
-			Required: true,
-		},
-		&bigquery.FieldSchema{
-			Name:     "_created_at",
-			Type:     bigquery.TimestampFieldType,
-			Required: true,
-		},
-		&bigquery.FieldSchema{
-			Name:     "_updated_at",
-			Type:     bigquery.TimestampFieldType,
-			Required: true,
-		},
-		&bigquery.FieldSchema{
-			Name:     "_version",
-			Type:     bigquery.StringFieldType,
-			Required: false,
-		},
-	}
-	var foundRequired bool
-	for _, c := range s.Columns {
-		var required bool
-		if c.FieldName == partitionField {
-			required = true
-			foundRequired = true
-		}
-		t := DataTypeNameToFieldType(c.DataTypeName)
-		if tt, ok := schemaOverride[c.FieldName]; ok {
-			t = tt
-		}
-		schema = append(schema, &bigquery.FieldSchema{
-			Name:        c.FieldName,
-			Description: c.Name,
-			Type:        t,
-			Required:    required,
-		})
-	}
-	if !foundRequired && partitionField != "" {
-		log.Panicf("partition column %q not detected", partitionField)
+	if *token == "" {
+		log.Fatal("missing --socrata-app-token or environment variable SOCRATA_APP_TOKEN")
 	}
 
-	m := &bigquery.TableMetadata{
-		Name:        ToTableName(s.ID, s.Name),
-		Description: s.Name,
-		Schema:      schema,
+	sodareq := soda.NewGetRequest(*dataset, *token)
+	// ":*" includes metadata records :id, :created_at, :updated_at, :version
+	sodareq.Query.Select = []string{":*", "*"}
+	md, err := sodareq.Metadata.Get()
+	if err != nil {
+		log.Fatal(err)
 	}
-	if partitionField != "" {
-		m.RequirePartitionFilter = true
-		m.TimePartitioning = &bigquery.TimePartitioning{
-			Field: partitionField,
-		}
+
+	fmt.Printf("Found Socrata Dataset: %s (%s) last modified %v\n", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
+	if *debug {
+		LogSocrataSchema(md.Columns)
 	}
-	return m
+
+	filename := fmt.Sprintf("%s.toml", md.ID)
+	fmt.Printf("creating %s\n", filename)
+	f, err := os.Create(filename)
+	defer f.Close()
+	encoder := toml.NewEncoder(f)
+	encoder.Encode(NewConfig(*dataset, *md))
+	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md)})
 }
 
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
+	if len(os.Args) < 2 {
+		fmt.Println("subcommand required")
+		fmt.Println(" * init")
+		fmt.Println(" * test")
+		fmt.Println(" * sync")
+		os.Exit(1)
+	}
+
+	switch os.Args[1] {
+	case "init":
+		initDataset(os.Args[2:])
+	default:
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+	os.Exit(0)
+
 	socrataDataset := flag.String("socrata-dataset", "", "the URL to the socrata dataset")
 	bucketName := flag.String("gs-bucket", "", "google storage bucket name")
 	projectID := flag.String("bq-project-id", "", "")
 	datasetName := flag.String("bq-dataset", "", "bigquery dataset name")
-	partitionColumn := flag.String("partition-column", "", "Date column to partition BQ table on")
 	quiet := flag.Bool("quiet", false, "disable progress output")
 	limit := flag.Int("limit", 100000000, "limit")
 	where := flag.String("where", "", "$where clause")
-	var schemaOverride StringArray
-	flag.Var(&schemaOverride, "schema-override", "override a field schema field:type (may be given multiple times)")
 	flag.Parse()
 
 	if *socrataDataset == "" {
@@ -176,13 +131,13 @@ func main() {
 		if e, ok := err.(*googleapi.Error); ok {
 			if e.Code == 404 {
 				log.Printf("Auto-creating table %s", e.Message)
-				if err := bqTable.Create(ctx, BQTableMetadata(*md, *partitionColumn, ParseSchemaOverride(schemaOverride))); err != nil {
-					log.Fatal(err)
-				}
-				tmd, err = bqTable.Metadata(ctx)
-				if err != nil {
-					log.Fatal(err)
-				}
+				// if err := bqTable.Create(ctx, BQTableMetadata(*md, *partitionColumn, ParseSchemaOverride(schemaOverride))); err != nil {
+				// 	log.Fatal(err)
+				// }
+				// tmd, err = bqTable.Metadata(ctx)
+				// if err != nil {
+				// 	log.Fatal(err)
+				// }
 			}
 		}
 	}
