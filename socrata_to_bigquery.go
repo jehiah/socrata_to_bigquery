@@ -115,11 +115,9 @@ func syncOne(configFile string, quiet bool, token string) {
 		log.Fatalf("Error fetching BigQuery Table %s.%s %s", dmd.FullID, md.ID, err)
 	}
 	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
-	os.Exit(1)
 
 	where := cf.BigQuery.WhereFilter
 	if where == "" {
-
 		// automatically generate a where clause
 		q := bqclient.Query(`SELECT max(_created_at) as created FROM ` + cf.BigQuery.SQLTableName())
 		it, err := q.Read(ctx)
@@ -156,7 +154,7 @@ func syncOne(configFile string, quiet bool, token string) {
 
 	// bigquery so we where we left off
 	// create if needed
-	sodareq.Query.Limit = uint(10000000)
+	sodareq.Query.Limit = uint(100000000)
 	sodareq.Query.Select = []string{":*", "*"}
 	sodareq.Query.Where = where
 	sodareq.Format = "json"

@@ -33,7 +33,7 @@ func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool) (int64, erro
 		}
 		mm, err := TransformOne(m, s)
 		if err != nil {
-			log.Printf("%s row:%d data:%#v", err, rows, m)
+			log.Fatalf("%s row:%d data:%#v", err, rows, m)
 			continue
 		}
 		if mm != nil {
@@ -65,10 +65,10 @@ func TransformOne(m map[string]interface{}, s TableSchema) (map[string]interface
 			switch schema.SourceFieldType {
 			case "url":
 				out[fieldName] = sourceValue.(map[string]interface{})["url"]
-			case "string":
+			case "text", "":
 				out[fieldName] = sourceValue
 			default:
-				return nil, fmt.Errorf("unhandled conversion from %q to %q", schema.SourceFieldType, schema.Type)
+				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
 
 		case bigquery.GeographyFieldType:
@@ -76,14 +76,19 @@ func TransformOne(m map[string]interface{}, s TableSchema) (map[string]interface
 			case "point":
 				out[fieldName], err = ToGeoJSON(sourceValue)
 			default:
-				return nil, fmt.Errorf("unhandled conversion from %q to %q", schema.SourceFieldType, schema.Type)
+				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
 		case bigquery.DateFieldType:
 			out[fieldName], err = ToDate(schema.TimeFormat, sourceValue.(string))
 		case bigquery.TimeFieldType:
-			out[fieldName], err = ToTime(schema.TimeFormat, sourceValue.(string))
+			if sourceValue != nil {
+				out[fieldName], err = ToTime(schema.TimeFormat, sourceValue.(string))
+			}
+		case bigquery.TimestampFieldType:
+			out[fieldName] = sourceValue
+			// TODO: improve conversion
 		default:
-			return nil, fmt.Errorf("unhandled BigQuery type %q", schema.Type)
+			return nil, fmt.Errorf("unhandled BigQuery type %q for field", schema.Type, fieldName)
 		}
 		if err != nil {
 			switch schema.OnError {
