@@ -11,4 +11,3 @@ func LogSocrataSchema(c []soda.Column) {
 		fmt.Printf("[%d] %q (%s) %s %#v\n", i, cc.FieldName, cc.DataTypeName, cc.Name, cc)
 	}
 }
-
