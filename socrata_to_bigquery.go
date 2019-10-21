@@ -52,7 +52,7 @@ func sync(args []string) {
 	if *token == "" {
 		log.Fatal("missing --socrata-app-token or environment variable SOCRATA_APP_TOKEN")
 	}
-	
+
 	if flagSet.NArg() == 0 {
 		log.Fatal("missing filename")
 	}
@@ -66,7 +66,6 @@ func syncOne(configFile string, quiet bool, token string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 
 	// todo Validate
 	// bg-project-id, etc
@@ -118,7 +117,6 @@ func syncOne(configFile string, quiet bool, token string) {
 	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
 	os.Exit(1)
 
-	var minCreatedDate time.Time
 	where := cf.BigQuery.WhereFilter
 	if where == "" {
 
@@ -145,7 +143,6 @@ func syncOne(configFile string, quiet bool, token string) {
 			}
 		}
 		if !r.Created.IsZero() {
-			minCreatedDate = r.Created
 			where = fmt.Sprintf(":created_at >= '%s'", r.Created.Add(time.Second).Format(time.RFC3339))
 			log.Printf("using automatic where clause %s", where)
 		}
@@ -185,7 +182,7 @@ func syncOne(configFile string, quiet bool, token string) {
 	w.ObjectAttrs.ContentType = "application/json"
 	w.ObjectAttrs.ContentEncoding = "gzip"
 	gw := gzip.NewWriter(w)
-	rows, transformErr := Transform(gw, resp.Body, md.Columns, tmd.Schema, minCreatedDate, quiet)
+	rows, transformErr := Transform(gw, resp.Body, cf.Schema, quiet)
 	log.Printf("wrote %d rows to Google Storage", rows)
 	err = gw.Close()
 	if err != nil {

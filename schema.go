@@ -10,15 +10,24 @@ import (
 	toml "github.com/pelletier/go-toml"
 )
 
+type OnError string
+
+const (
+	SkipValue  OnError = "SKIP_VALUE"
+	SkipRow    OnError = "SKIP_ROW"
+	RaiseError OnError = "ERROR"
+)
+
 // SchemaField represents a toml record which configures how data will be transformed from Socrata to BigQuery
 type SchemaField struct {
-	SourceField   string             `toml:"source_field"`
-	Description   string             `toml:"description,omitempty"`
-	Type          bigquery.FieldType `toml:"bigquery_type"`
-	TimeFormat    string             `comment:"the time.Parse format string" toml:"time_format,omitempty"`
-	Required      bool               `toml:"required"`
-	OnError       string             `comment:"SKIP | ERROR" toml:"on_error,omitempty"`
-	ExampleValues string             `commented:"true" toml:"example_values,omitempty"`
+	SourceField     string             `toml:"source_field"`
+	SourceFieldType string             `toml:"source_field_type,omitempty"`
+	Description     string             `toml:"description,omitempty"`
+	Type            bigquery.FieldType `toml:"bigquery_type"`
+	TimeFormat      string             `comment:"the time.Parse format string" toml:"time_format,omitempty"`
+	Required        bool               `toml:"required"`
+	OnError         OnError            `comment:"SKIP_VALUE | SKIP_ROW | ERROR " toml:"on_error,omitempty"`
+	ExampleValues   string             `commented:"true" toml:"example_values,omitempty"`
 }
 type TableSchema map[string]SchemaField
 
@@ -83,13 +92,14 @@ func GuessBQType(t, name string) (bigquery.FieldType, string) {
 			return bigquery.DateFieldType, "2006/01/02"
 		}
 		if strings.Contains(name, "time") {
-			return bigquery.TimeFieldType, "03:04p"
+			// TODO better guessing
+			return bigquery.TimeFieldType, "03:04pm"
 		}
 		return bigquery.StringFieldType, ""
 	case "number":
 		return bigquery.NumericFieldType, ""
 	case "calendar_date":
-		return bigquery.DateFieldType, ""
+		return bigquery.DateFieldType, "2006-01-02T00:00:00.000"
 	case "point":
 		return bigquery.GeographyFieldType, ""
 	}
@@ -125,13 +135,19 @@ func NewSchema(s soda.Metadata, examples map[string]string) TableSchema {
 	}
 	for _, c := range s.Columns {
 		fieldType, timeFormat := GuessBQType(c.DataTypeName, c.FieldName)
+		var oe OnError
+		if timeFormat != "" {
+			oe = SkipValue
+		}
 		t[c.FieldName] = SchemaField{
-			SourceField:   c.FieldName,
-			Type:          fieldType,
-			TimeFormat:    timeFormat,
-			Required:      false,
-			Description:   strings.TrimSpace(c.Name),
-			ExampleValues: examples[c.FieldName],
+			SourceField:     c.FieldName,
+			SourceFieldType: c.DataTypeName,
+			Type:            fieldType,
+			TimeFormat:      timeFormat,
+			Required:        false,
+			Description:     strings.TrimSpace(c.Name),
+			ExampleValues:   examples[c.FieldName],
+			OnError:         oe,
 		}
 	}
 	return t
