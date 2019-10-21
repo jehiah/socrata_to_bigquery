@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"encoding/json"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -61,7 +63,71 @@ func initDataset(args []string) {
 	defer f.Close()
 	encoder := toml.NewEncoder(f)
 	encoder.Encode(NewConfig(*dataset, *md))
-	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md)})
+	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, MustExampleRecords(*sodareq))})
+}
+
+
+func MustExampleRecords(r soda.GetRequest) map[string]string {
+	d, err := ExampleRecords(r)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return d
+}
+
+func ExampleRecords(sr soda.GetRequest) (map[string]string, error) {
+	r := &sr
+	r.Query.Limit = 10
+	fmt.Println("Fetching example records.")
+	resp, err := r.Get()
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var data []map[string]interface{}
+	if err = json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	buffer := make(map[string][]string)
+	for _, row := range data {
+		for k, v := range row {
+			switch v := v.(type) {
+			case string:
+				buffer[k] = append(buffer[k], fmt.Sprintf("%q", v))
+			case int, int64:
+				buffer[k] = append(buffer[k], fmt.Sprintf("%d", v))
+			case bool:
+				buffer[k] = append(buffer[k], fmt.Sprintf("%v", v))
+			default:
+				log.Printf("unhandled type %T %#v", v, v)
+			}
+		}
+	}
+	
+	out := make(map[string]string)
+	for k, v := range buffer {
+		out[k] = strings.Join(uniqExamples(v, 3), ", ")
+	}
+	return out, nil
+}
+
+func uniqExamples(a[]string, max int) []string {
+	var out []string
+	data := make(map[string]bool, len(a))
+	for _, aa := range a {
+		if data[aa] {
+			continue
+		}
+		data[aa] = true
+		out = append(out, aa)
+		if len(out) == max {
+			break
+		}
+	}
+	return out
 }
 
 func main() {

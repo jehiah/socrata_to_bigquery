@@ -16,7 +16,7 @@ type SchemaField struct {
 	TimeFormat    string             `comment:"the time.Parse format string" toml:"time_format,omitempty"`
 	Required      bool `toml:"required"`
 	OnError       string `comment:"SKIP | ERROR" toml:"on_error,omitempty"`
-	ExampleValues string `commented:"true" toml:"examples,omitempty"`
+	ExampleValues string `commented:"true" toml:"example_values,omitempty"`
 }
 type TableSchema map[string]SchemaField
 
@@ -70,27 +70,31 @@ func GuessBQType(t, name string) (bigquery.FieldType, string) {
 	panic(fmt.Sprintf("unknown type %q", t))
 }
 
-func NewSchema(s soda.Metadata) TableSchema {
+func NewSchema(s soda.Metadata, examples map[string]string) TableSchema {
 	t := TableSchema{
 		"_id": SchemaField{
 			SourceField: ":id",
 			Type:        bigquery.StringFieldType,
 			Required:    true,
+			ExampleValues: examples[":id"],
 		},
 		"_created_at": SchemaField{
 			SourceField: ":created_at",
 			Type:        bigquery.TimestampFieldType,
 			Required:    true,
+			ExampleValues: examples[":created_at"],
 		},
 		"_updated_at": SchemaField{
 			SourceField: ":updated_at",
 			Type:        bigquery.TimestampFieldType,
 			Required:    true,
+			ExampleValues: examples[":updated_at"],
 		},
 		"_version": SchemaField{
 			SourceField: ":version",
 			Type:        bigquery.StringFieldType,
 			Required:    false,
+			ExampleValues: examples[":version"],
 		},
 	}
 	for _, c := range s.Columns {
@@ -101,6 +105,7 @@ func NewSchema(s soda.Metadata) TableSchema {
 			TimeFormat:  timeFormat,
 			Required:    false,
 			Description: strings.TrimSpace(c.Name),
+			ExampleValues: examples[c.FieldName],
 		}
 	}
 	return t
