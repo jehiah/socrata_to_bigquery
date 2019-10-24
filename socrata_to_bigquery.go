@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -32,17 +33,18 @@ func main() {
 	case "init":
 		initDataset(os.Args[2:])
 	case "sync":
-		sync(os.Args[2:])
+		syncCmd(os.Args[2:])
 	default:
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 }
 
-func sync(args []string) {
+func syncCmd(args []string) {
 	flagSet := flag.NewFlagSet("sync", flag.ExitOnError)
 	quiet := flagSet.Bool("quiet", false, "disable progress output")
 	token := flagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
+	cpuprofile := flagSet.String("cpuprofile", "", "write cpu profile to `file`")
 	// limit := flag.Int("limit", 100000000, "limit")
 	// where := flag.String("where", "", "$where clause")
 	flagSet.Parse(args)
@@ -57,11 +59,11 @@ func sync(args []string) {
 		log.Fatal("missing filename")
 	}
 	for _, configFile := range flagSet.Args() {
-		syncOne(configFile, *quiet, *token)
+		syncOne(configFile, *quiet, *token, *cpuprofile)
 	}
 }
 
-func syncOne(configFile string, quiet bool, token string) {
+func syncOne(configFile string, quiet bool, token, cpuprofile string) {
 	cf, err := LoadConfigFile(configFile)
 	if err != nil {
 		log.Fatal(err)
@@ -116,6 +118,18 @@ func syncOne(configFile string, quiet bool, token string) {
 	}
 	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
 
+	// socrata count
+	sodataCount, err := sodareq.Count()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	missing := uint64(sodataCount) - tmd.NumRows
+	log.Printf("BQ Records: %d (missing:%d) Socrata Records: %d", tmd.NumRows, missing, sodataCount)
+	if sodataCount == 0 {
+		return
+	}
+
 	where := cf.BigQuery.WhereFilter
 	if where == "" {
 		// automatically generate a where clause
@@ -155,6 +169,7 @@ func syncOne(configFile string, quiet bool, token string) {
 	// bigquery so we where we left off
 	// create if needed
 	sodareq.Query.Limit = uint(100000000)
+	sodareq.Query.Limit = uint(200000)
 	sodareq.Query.Select = []string{":*", "*"}
 	sodareq.Query.Where = where
 	sodareq.Format = "json"
@@ -180,7 +195,20 @@ func syncOne(configFile string, quiet bool, token string) {
 	w.ObjectAttrs.ContentType = "application/json"
 	w.ObjectAttrs.ContentEncoding = "gzip"
 	gw := gzip.NewWriter(w)
-	rows, transformErr := Transform(gw, resp.Body, cf.Schema, quiet)
+
+	var f *os.File
+	if cpuprofile != "" {
+		log.Printf("creating %s", cpuprofile)
+		f, err = os.Create(cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+	}
+
+	rows, transformErr := Transform(gw, resp.Body, cf.Schema, quiet, missing)
 	log.Printf("wrote %d rows to Google Storage", rows)
 	err = gw.Close()
 	if err != nil {
@@ -194,6 +222,13 @@ func syncOne(configFile string, quiet bool, token string) {
 	if transformErr != nil {
 		log.Fatal(transformErr)
 	}
+
+	if cpuprofile != "" {
+		log.Printf("wrote cpu profile to %q", cpuprofile)
+		pprof.StopCPUProfile()
+		f.Close()
+	}
+
 	if rows != 0 {
 		// load into bigquery
 		gcsRef := bigquery.NewGCSReference(fmt.Sprintf("%s/%s", cf.GSBucket(), obj.ObjectName()))

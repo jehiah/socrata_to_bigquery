@@ -72,7 +72,7 @@ func LoadConfigFile(name string) (ConfigFile, error) {
 
 func ToTableName(id, name string) string {
 	r := strings.NewReplacer("-", "_", " ", "_")
-	return r.Replace(id + "-" + strings.ToLower(name))
+	return r.Replace(strings.ToLower(name) + "-" + id)
 }
 
 func NewConfig(url string, md soda.Metadata) Config {

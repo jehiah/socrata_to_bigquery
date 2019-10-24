@@ -6,45 +6,64 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/bigquery"
 )
 
+type Record map[string]interface{}
+
 // Transform converts a JSON export from Socrata to a JSON valid for the target schema on BigQuery
-func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool) (int64, error) {
+func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool, estRows uint64) (uint64, error) {
 	dec := json.NewDecoder(r)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 
 	// read open bracket
-	var rows int64
+	var rows uint64
 	_, err := dec.Token()
 	if err != nil {
 		return rows, fmt.Errorf("initial token; rows %d %s", rows, err)
 	}
 	start := time.Now()
+	c := make(chan Record, 1000)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for m := range c {
+			rows += 1
+			mm, err := TransformOne(m, s)
+			if err != nil {
+				log.Fatalf("%s row:%d data:%#v", err, rows, m)
+				continue
+			}
+			if mm != nil {
+				enc.Encode(mm)
+			}
+			if !quiet && rows%100000 == 0 {
+				duration := time.Since(start).Truncate(time.Second)
+				speed := duration / time.Duration(rows)
+				remain := estRows - rows
+				etr := (time.Duration(remain) * speed).Truncate(time.Second)
+				log.Printf("processed %d rows (%s). Remaining: %d rows (%s)", rows, duration, remain, etr)
+			}
+		}
+		wg.Done()
+	}()
 	for dec.More() {
-		rows += 1
-		var m map[string]interface{}
+		var m Record
 		err := dec.Decode(&m)
 		if err != nil {
 			return rows, fmt.Errorf("row %d %s", rows, err)
 		}
-		mm, err := TransformOne(m, s)
-		if err != nil {
-			log.Fatalf("%s row:%d data:%#v", err, rows, m)
-			continue
-		}
-		if mm != nil {
-			enc.Encode(mm)
-		}
-		if !quiet && rows%100000 == 0 {
-			log.Printf("processed %d rows (%s)", rows, time.Since(start).Truncate(time.Second))
-		}
+		c <- m
 	}
+	close(c)
+	wg.Wait()
 	if !quiet && rows%100000 != 0 {
-		log.Printf("processed %d rows (%s)", rows, time.Since(start).Truncate(time.Second))
+		duration := time.Since(start).Truncate(time.Second)
+		log.Printf("processed %d rows (%s)", rows, duration)
 	}
 	_, err = dec.Token()
 	if err != nil {
@@ -53,8 +72,8 @@ func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool) (int64, erro
 	return rows, nil
 }
 
-func TransformOne(m map[string]interface{}, s TableSchema) (map[string]interface{}, error) {
-	out := make(map[string]interface{}, len(m))
+func TransformOne(m Record, s TableSchema) (map[string]interface{}, error) {
+	out := make(Record, len(m))
 	for fieldName, schema := range s {
 		sourceValue := m[schema.SourceField]
 		var err error
@@ -79,7 +98,9 @@ func TransformOne(m map[string]interface{}, s TableSchema) (map[string]interface
 				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
 		case bigquery.DateFieldType:
-			out[fieldName], err = ToDate(schema.TimeFormat, sourceValue.(string))
+			if sourceValue != nil {
+				out[fieldName], err = ToDate(schema.TimeFormat, sourceValue.(string))
+			}
 		case bigquery.TimeFieldType:
 			if sourceValue != nil {
 				out[fieldName], err = ToTime(schema.TimeFormat, sourceValue.(string))
@@ -88,7 +109,7 @@ func TransformOne(m map[string]interface{}, s TableSchema) (map[string]interface
 			out[fieldName] = sourceValue
 			// TODO: improve conversion
 		default:
-			return nil, fmt.Errorf("unhandled BigQuery type %q for field", schema.Type, fieldName)
+			return nil, fmt.Errorf("unhandled BigQuery type %q for field %q", schema.Type, fieldName)
 		}
 		if err != nil {
 			switch schema.OnError {
