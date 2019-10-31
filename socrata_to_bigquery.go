@@ -169,7 +169,6 @@ func syncOne(configFile string, quiet bool, token, cpuprofile string) {
 	// bigquery so we where we left off
 	// create if needed
 	sodareq.Query.Limit = uint(100000000)
-	sodareq.Query.Limit = uint(200000)
 	sodareq.Query.Select = []string{":*", "*"}
 	sodareq.Query.Where = where
 	sodareq.Format = "json"

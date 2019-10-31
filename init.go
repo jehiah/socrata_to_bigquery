@@ -98,6 +98,12 @@ func ExampleRecords(sr soda.GetRequest) (map[string]string, error) {
 				buffer[k] = append(buffer[k], fmt.Sprintf("%d", v))
 			case bool:
 				buffer[k] = append(buffer[k], fmt.Sprintf("%v", v))
+			case map[string]interface{}:
+				if u, ok := v["url"]; ok && u != nil{
+					buffer[k] = append(buffer[k], u.(string))
+				} else {
+					log.Printf("unhandled type %T %#v", v, v)
+				}
 			default:
 				log.Printf("unhandled type %T %#v", v, v)
 			}
