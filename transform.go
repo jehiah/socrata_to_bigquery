@@ -86,6 +86,11 @@ func TransformOne(m Record, s TableSchema) (map[string]interface{}, error) {
 				out[fieldName] = sourceValue.(map[string]interface{})["url"]
 			case "text", "":
 				out[fieldName] = sourceValue
+				if schema.Required {
+					if sv, ok := sourceValue.(string); ok && sv == "" || sourceValue == nil {
+						err = fmt.Errorf("missing required field %q", fieldName)
+					}
+				}
 			default:
 				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
@@ -99,11 +104,19 @@ func TransformOne(m Record, s TableSchema) (map[string]interface{}, error) {
 			}
 		case bigquery.DateFieldType:
 			if sourceValue != nil {
-				out[fieldName], err = ToDate(schema.TimeFormat, sourceValue.(string))
+				v, err := ToDate(schema.TimeFormat, sourceValue.(string))
+				out[fieldName] = v
+				if schema.Required && v == nil && err == nil {
+					err = fmt.Errorf("missing required field %q", fieldName)
+				}
+			} else if schema.Required {
+				err = fmt.Errorf("missing required field %q", fieldName)
 			}
 		case bigquery.TimeFieldType:
 			if sourceValue != nil {
 				out[fieldName], err = ToTime(schema.TimeFormat, sourceValue.(string))
+			} else if schema.Required {
+				err = fmt.Errorf("missing required field %q", fieldName)
 			}
 		case bigquery.TimestampFieldType:
 			out[fieldName] = sourceValue
