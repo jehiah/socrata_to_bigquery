@@ -95,3 +95,28 @@ func TestToTime(t *testing.T) {
 		})
 	}
 }
+
+func TestToDate(t *testing.T) {
+	type testCase struct {
+		have   string
+		format string
+		expect string
+	}
+	tests := []testCase{
+		{"02/28/2019", "01/02/2006", "2019-02-28"},
+	}
+	for i, tc := range tests {
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			t.Logf("%#v", tc)
+			got, err := ToDate(tc.format, tc.have)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g, ok := got.(string); !ok {
+				t.Fatalf("got %#v not %q", got, tc.expect)
+			} else if g != tc.expect {
+				t.Fatalf("got %q not %q", g, tc.expect)
+			}
+		})
+	}
+}

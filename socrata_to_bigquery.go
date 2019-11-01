@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/storage"
@@ -170,9 +170,9 @@ func syncOne(configFile string, quiet bool, token string) {
 	for n := uint64(0); n < missing; n += pageSize {
 		wg.Add(1)
 		n := n
-		throttle.Run(func(){
+		go throttle.Run(func() {
 			remain := pageSize
-			if n + remain > missing {
+			if n+remain > missing {
 				remain = missing - n
 			}
 			err := CopyChunk(ctx, cf, token, where, n, remain, bkt, bqTable, quiet)
@@ -220,6 +220,9 @@ func CopyChunk(ctx context.Context, cf ConfigFile, token, where string, offset, 
 
 	rows, transformErr := Transform(gw, resp.Body, cf.Schema, quiet, limit)
 	log.Printf("wrote %d rows to Google Storage", rows)
+	if transformErr != nil {
+		log.Printf("transformErr: %s", transformErr)
+	}
 	err = gw.Close()
 	if err != nil {
 		return err

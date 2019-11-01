@@ -104,7 +104,8 @@ func TransformOne(m Record, s TableSchema) (map[string]interface{}, error) {
 			}
 		case bigquery.DateFieldType:
 			if sourceValue != nil {
-				v, err := ToDate(schema.TimeFormat, sourceValue.(string))
+				var v interface{}
+				v, err = ToDate(schema.TimeFormat, sourceValue.(string))
 				out[fieldName] = v
 				if schema.Required && v == nil && err == nil {
 					err = fmt.Errorf("missing required field %q", fieldName)
