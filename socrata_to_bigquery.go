@@ -3,8 +3,10 @@ package main
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -164,8 +166,8 @@ func syncOne(configFile string, quiet bool, token string) {
 		log.Fatal(err)
 	}
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
-	pageSize := uint64(1000000)
-	throttle := NewConcurrentLimit(3)
+	pageSize := uint64(500000)
+	throttle := NewConcurrentLimit(2)
 	var wg sync.WaitGroup
 	for n := uint64(0); n < missing; n += pageSize {
 		wg.Add(1)
@@ -175,9 +177,16 @@ func syncOne(configFile string, quiet bool, token string) {
 			if n+remain > missing {
 				remain = missing - n
 			}
-			err := CopyChunk(ctx, cf, token, where, n, remain, bkt, bqTable, quiet)
-			if err != nil {
-				log.Fatal(err)
+			for i := 0; i < 3; i++ {
+				err := CopyChunk(ctx, cf, token, where, n, remain, bkt, bqTable, quiet)
+				if errors.Is(err, io.EOF) {
+					log.Printf("%d-%d err %s on try %d.", n, n+remain, err, i)
+					continue
+				}
+				if err != nil {
+					log.Fatal(err)
+				}
+
 			}
 			wg.Done()
 		})

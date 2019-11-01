@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -24,47 +23,39 @@ func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool, estRows uint
 	var rows uint64
 	_, err := dec.Token()
 	if err != nil {
-		return rows, fmt.Errorf("initial token; rows %d %s", rows, err)
+		return rows, fmt.Errorf("initial token; rows %d %w", rows, err)
 	}
 	start := time.Now()
-	c := make(chan Record, 1000)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		for m := range c {
-			rows += 1
-			mm, err := TransformOne(m, s)
-			if err != nil {
-				log.Fatalf("%s row:%d data:%#v", err, rows, m)
-				continue
-			}
-			if mm != nil {
-				enc.Encode(mm)
-			}
-			if !quiet && rows%100000 == 0 {
-				duration := time.Since(start).Truncate(time.Second)
-				speed := duration / time.Duration(rows)
-				remain := estRows - rows
-				etr := (time.Duration(remain) * speed).Truncate(time.Second)
-				log.Printf("processed %d rows (%s). Remaining: %d rows (%s)", rows, duration, remain, etr)
-			}
-		}
-		wg.Done()
-	}()
 	for dec.More() {
+		rows += 1
 		var m Record
 		err := dec.Decode(&m)
 		if err != nil {
-			return rows, fmt.Errorf("row %d %s", rows, err)
+			return rows, fmt.Errorf("row %d %w", rows, err)
 		}
-		c <- m
+		mm, err := TransformOne(m, s)
+		if err != nil {
+			return rows, fmt.Errorf("row %d %w", rows, err)
+		}
+		if mm != nil {
+			err = enc.Encode(mm)
+			if err != nil {
+				return rows, fmt.Errorf("row %d %w", rows, err)
+			}
+		}
+		if !quiet && rows%100000 == 0 {
+			duration := time.Since(start).Truncate(time.Second)
+			speed := duration / time.Duration(rows)
+			remain := estRows - rows
+			etr := (time.Duration(remain) * speed).Truncate(time.Second)
+			log.Printf("processed %d rows (%s). Remaining: %d rows (%s)", rows, duration, remain, etr)
+		}
 	}
-	close(c)
-	wg.Wait()
 	if !quiet && rows%100000 != 0 {
 		duration := time.Since(start).Truncate(time.Second)
 		log.Printf("processed %d rows (%s)", rows, duration)
 	}
+	// read the close bracket
 	_, err = dec.Token()
 	if err != nil {
 		return rows, err
@@ -128,10 +119,10 @@ func TransformOne(m Record, s TableSchema) (map[string]interface{}, error) {
 		if err != nil {
 			switch schema.OnError {
 			case SkipValue:
-				log.Printf("skipping invalid value %q in field %q %s", sourceValue, schema.SourceField, err)
+				log.Printf("skipping invalid value %q in field %q %w", sourceValue, schema.SourceField, err)
 				out[fieldName] = nil
 			case SkipRow, "":
-				log.Printf("skipping row. invalid value %q in field %q %s", sourceValue, schema.SourceField, err)
+				log.Printf("skipping row. invalid value %q in field %q %w", sourceValue, schema.SourceField, err)
 				return nil, nil
 			case RaiseError:
 				return nil, err
