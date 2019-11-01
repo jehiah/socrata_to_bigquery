@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
 	"time"
+	"sync"
 
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/storage"
@@ -44,7 +44,6 @@ func syncCmd(args []string) {
 	flagSet := flag.NewFlagSet("sync", flag.ExitOnError)
 	quiet := flagSet.Bool("quiet", false, "disable progress output")
 	token := flagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
-	cpuprofile := flagSet.String("cpuprofile", "", "write cpu profile to `file`")
 	// limit := flag.Int("limit", 100000000, "limit")
 	// where := flag.String("where", "", "$where clause")
 	flagSet.Parse(args)
@@ -59,11 +58,11 @@ func syncCmd(args []string) {
 		log.Fatal("missing filename")
 	}
 	for _, configFile := range flagSet.Args() {
-		syncOne(configFile, *quiet, *token, *cpuprofile)
+		syncOne(configFile, *quiet, *token)
 	}
 }
 
-func syncOne(configFile string, quiet bool, token, cpuprofile string) {
+func syncOne(configFile string, quiet bool, token string) {
 	cf, err := LoadConfigFile(configFile)
 	if err != nil {
 		log.Fatal(err)
@@ -165,67 +164,73 @@ func syncOne(configFile string, quiet bool, token, cpuprofile string) {
 		log.Fatal(err)
 	}
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
+	pageSize := uint64(1000000)
+	throttle := NewConcurrentLimit(3)
+	var wg sync.WaitGroup
+	for n := uint64(0); n < missing; n += pageSize {
+		wg.Add(1)
+		n := n
+		throttle.Run(func(){
+			remain := pageSize
+			if n + remain > missing {
+				remain = missing - n
+			}
+			err := CopyChunk(ctx, cf, token, where, n, remain, bkt, bqTable, quiet)
+			if err != nil {
+				log.Fatal(err)
+			}
+			wg.Done()
+		})
+	}
+	wg.Wait()
+	log.Printf("done")
 
-	// bigquery so we where we left off
-	// create if needed
-	sodareq.Query.Limit = uint(100000000)
+}
+
+func CopyChunk(ctx context.Context, cf ConfigFile, token, where string, offset, limit uint64, bkt *storage.BucketHandle, bqTable *bigquery.Table, quiet bool) error {
+	// start socrata data stream
+	sodareq := soda.NewGetRequest(cf.Dataset, token)
+	sodareq.Query.Offset = uint(offset)
+	sodareq.Query.Limit = uint(limit)
 	sodareq.Query.Select = []string{":*", "*"}
 	sodareq.Query.Where = where
 	sodareq.Format = "json"
 	req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	req.URL.RawQuery = sodareq.URLValues().Encode()
 	req.Header.Set("X-App-Token", token)
 	log.Printf("streaming from %s", req.URL)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if resp.StatusCode >= 400 {
-		log.Fatalf("got unexpected response %d", resp.StatusCode)
+		return fmt.Errorf("got unexpected response %d", resp.StatusCode)
 	}
-	// query socrata
+
 	// stream to a google storage file
-	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), md.ID+".json.gz"))
+	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), cf.DatasetID()+"-"+fmt.Sprintf("%d", offset)+".json.gz"))
 	log.Printf("streaming to %s/%s", cf.GSBucket(), obj.ObjectName())
 	w := obj.NewWriter(ctx)
 	w.ObjectAttrs.ContentType = "application/json"
 	w.ObjectAttrs.ContentEncoding = "gzip"
 	gw := gzip.NewWriter(w)
 
-	var f *os.File
-	if cpuprofile != "" {
-		log.Printf("creating %s", cpuprofile)
-		f, err = os.Create(cpuprofile)
-		if err != nil {
-			log.Fatal("could not create CPU profile: ", err)
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
-	}
-
-	rows, transformErr := Transform(gw, resp.Body, cf.Schema, quiet, missing)
+	rows, transformErr := Transform(gw, resp.Body, cf.Schema, quiet, limit)
 	log.Printf("wrote %d rows to Google Storage", rows)
 	err = gw.Close()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	err = w.Close()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	resp.Body.Close()
 	if transformErr != nil {
-		log.Fatal(transformErr)
-	}
-
-	if cpuprofile != "" {
-		log.Printf("wrote cpu profile to %q", cpuprofile)
-		pprof.StopCPUProfile()
-		f.Close()
+		return transformErr
 	}
 
 	if rows != 0 {
@@ -238,22 +243,23 @@ func syncOne(configFile string, quiet bool, token, cpuprofile string) {
 
 		loadJob, err := loader.Run(ctx)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		log.Printf("BigQuery import running job %s", loadJob.ID())
 		status, err := loadJob.Wait(ctx)
 		log.Printf("BigQuery import job %s done", loadJob.ID())
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		if err = status.Err(); err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
 	// cleanup google storage
 	log.Printf("removing temp file %s/%s", cf.GSBucket(), obj.ObjectName())
 	if err = obj.Delete(ctx); err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }

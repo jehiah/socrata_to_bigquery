@@ -59,6 +59,11 @@ type ConfigFile struct {
 	Schema TableSchema `toml:"schema"`
 }
 
+func (cf ConfigFile) DatasetID() string {
+	c := strings.Split(cf.Dataset, "/")
+	return c[len(c)-1]
+}
+
 func LoadConfigFile(name string) (ConfigFile, error) {
 	var cf ConfigFile
 	f, err := os.Open(name)
