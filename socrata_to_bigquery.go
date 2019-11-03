@@ -120,6 +120,7 @@ func syncOne(configFile string, quiet bool, token string) {
 	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
 
 	// socrata count
+	sodareq.Query.Where = cf.BigQuery.WhereFilter
 	sodataCount, err := sodareq.Count()
 	if err != nil {
 		log.Fatal(err)
@@ -132,8 +133,8 @@ func syncOne(configFile string, quiet bool, token string) {
 	}
 
 	where := cf.BigQuery.WhereFilter
-	if where == "" {
-		// automatically generate a where clause
+	if tmd.NumRows > 0 {
+		// automatically generate a where clause picking up after the last _created_at
 		q := bqclient.Query(`SELECT max(_created_at) as created FROM ` + cf.BigQuery.SQLTableName())
 		it, err := q.Read(ctx)
 		if err != nil {
@@ -156,8 +157,13 @@ func syncOne(configFile string, quiet bool, token string) {
 			}
 		}
 		if !r.Created.IsZero() {
-			where = fmt.Sprintf(":created_at >= '%s'", r.Created.Add(time.Second).Format(time.RFC3339))
-			log.Printf("using automatic where clause %s", where)
+			createdFilter := fmt.Sprintf(":created_at >= '%s'", r.Created.Add(time.Second).Format(time.RFC3339))
+			log.Printf("filtering to %s", createdFilter)
+			if where == "" {
+				where = createdFilter
+			} else {
+				where = where + " and " + createdFilter
+			}
 		}
 	}
 
@@ -166,6 +172,8 @@ func syncOne(configFile string, quiet bool, token string) {
 		log.Fatal(err)
 	}
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
+	// https://support.socrata.com/hc/en-us/requests/37801
+	// Socrata suggested 1M was too large a sync value
 	pageSize := uint64(500000)
 	throttle := NewConcurrentLimit(2)
 	var wg sync.WaitGroup
@@ -186,7 +194,7 @@ func syncOne(configFile string, quiet bool, token string) {
 				if err != nil {
 					log.Fatal(err)
 				}
-
+				break
 			}
 			wg.Done()
 		})
@@ -203,6 +211,7 @@ func CopyChunk(ctx context.Context, cf ConfigFile, token, where string, offset, 
 	sodareq.Query.Limit = uint(limit)
 	sodareq.Query.Select = []string{":*", "*"}
 	sodareq.Query.Where = where
+	sodareq.Query.AddOrder(":id", false) // make paging stable. see https://dev.socrata.com/docs/paging.html
 	sodareq.Format = "json"
 	req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
 	if err != nil {
