@@ -20,7 +20,7 @@ func initDataset(args []string) {
 	token := initFlagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
 	debug := initFlagSet.Bool("debug", false, "show debug output")
 	dataDir := initFlagSet.String("data-dir", "", "directory to create config file in")
-	fn := initFlagSet.String("filename", "", "defaults to ${ID}.toml")
+	fn := initFlagSet.String("filename", "", "defaults to ${NAME}-${ID}.toml")
 	initFlagSet.Parse(args)
 
 	if *dataset == "" {
@@ -48,7 +48,7 @@ func initDataset(args []string) {
 
 	filename := *fn
 	if filename == "" {
-		filename = fmt.Sprintf("%s.toml", md.ID)
+		filename = fmt.Sprintf("%s.toml", strings.Replace(ToTableName(md.ID, md.Name), "_", "-", -1))
 	}
 	if *dataDir != "" {
 		filename = filepath.Join(*dataDir, filename)
@@ -60,7 +60,8 @@ func initDataset(args []string) {
 	}
 	defer f.Close()
 	encoder := toml.NewEncoder(f)
-	encoder.Encode(NewConfig(*dataset, *md))
+	c := NewConfig(*dataset, *md)
+	encoder.Encode(c)
 	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, MustExampleRecords(*sodareq))})
 }
 

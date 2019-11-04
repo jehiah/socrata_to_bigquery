@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("subcommand required")
 		fmt.Println(" * init")
+		fmt.Println(" * download")
 		fmt.Println(" * sync")
 		os.Exit(1)
 	}
@@ -36,6 +38,8 @@ func main() {
 		initDataset(os.Args[2:])
 	case "sync":
 		syncCmd(os.Args[2:])
+	case "download":
+		downloadCmd(os.Args[2:])
 	default:
 		flag.PrintDefaults()
 		os.Exit(1)
@@ -61,6 +65,41 @@ func syncCmd(args []string) {
 	}
 	for _, configFile := range flagSet.Args() {
 		syncOne(configFile, *quiet, *token)
+	}
+}
+
+func downloadCmd(args []string) {
+	flagSet := flag.NewFlagSet("sync", flag.ExitOnError)
+	quiet := flagSet.Bool("quiet", false, "disable progress output")
+	token := flagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
+	downloadFile := flagSet.String("download-file", "", "re-process existing download file (gzip supported)")
+	flagSet.Parse(args)
+	if *token == "" {
+		*token = os.Getenv("SOCRATA_APP_TOKEN")
+	}
+	if *token == "" {
+		log.Fatal("missing --socrata-app-token or environment variable SOCRATA_APP_TOKEN")
+	}
+
+	if flagSet.NArg() == 0 {
+		log.Fatal("missing filename")
+	}
+	for _, configFile := range flagSet.Args() {
+		var r io.ReadCloser
+		if *downloadFile != "" {
+			var err error
+			r, err = os.Open(*downloadFile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if strings.HasSuffix(*downloadFile, ".gz") {
+				r, err = gzip.NewReader(r)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+		downloadOne(configFile, *quiet, r, *token)
 	}
 }
 
@@ -204,6 +243,74 @@ func syncOne(configFile string, quiet bool, token string) {
 
 }
 
+func downloadOne(configFile string, quiet bool, r io.ReadCloser, token string) {
+	cf, err := LoadConfigFile(configFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// todo Validate
+	// bg-project-id, etc
+
+	sodareq := soda.NewGetRequest(cf.Dataset, token)
+	sodareq.Query.Select = []string{":*", "*"}
+	md, err := sodareq.Metadata.Get()
+	// https://data.cityofnewyork.us/api/views/${ID}/rows.json?accessType=DOWNLOAD
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Socrata: %s (%s) last modified %v", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
+
+	ctx := context.Background()
+	bqclient, err := bigquery.NewClient(ctx, cf.BigQuery.ProjectID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dataset := bqclient.Dataset(cf.BigQuery.DatasetName)
+	dmd, err := dataset.Metadata(ctx)
+	if err != nil {
+		// TODO: dataset doesn't exist? require that first?
+		log.Fatalf("Error fetching BigQuery dataset %s.%s err %s", cf.BigQuery.ProjectID, cf.BigQuery.DatasetName, err)
+	}
+	log.Printf("BQ Dataset %s OK (last modified %s)", dmd.FullID, dmd.LastModifiedTime)
+
+	bqTable := dataset.Table(cf.BigQuery.TableName)
+	tmd, err := bqTable.Metadata(ctx)
+	if err != nil {
+		if e, ok := err.(*googleapi.Error); ok {
+			if e.Code == 404 {
+				log.Printf("Auto-creating table %s", e.Message)
+				if err := bqTable.Create(ctx, &bigquery.TableMetadata{
+					Name:        cf.BigQuery.TableName,
+					Description: cf.BigQuery.Description,
+					Schema:      cf.Schema.BigQuerySchema(),
+				}); err != nil {
+					log.Fatal(err)
+				}
+				tmd, err = bqTable.Metadata(ctx)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+	}
+	if tmd == nil {
+		log.Fatalf("Error fetching BigQuery Table %s.%s %s", dmd.FullID, md.ID, err)
+	}
+	log.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
+
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	bkt := client.Bucket(cf.GoogleStorageBucketName)
+
+	Download(ctx, cf, r, token, bkt, bqTable, quiet)
+	log.Printf("done")
+
+}
+
 func CopyChunk(ctx context.Context, cf ConfigFile, token, where string, offset, limit uint64, bkt *storage.BucketHandle, bqTable *bigquery.Table, quiet bool) error {
 	// start socrata data stream
 	sodareq := soda.NewGetRequest(cf.Dataset, token)
@@ -250,6 +357,84 @@ func CopyChunk(ctx context.Context, cf ConfigFile, token, where string, offset, 
 		return err
 	}
 	resp.Body.Close()
+	if transformErr != nil {
+		return transformErr
+	}
+
+	if rows != 0 {
+		// load into bigquery
+		gcsRef := bigquery.NewGCSReference(fmt.Sprintf("%s/%s", cf.GSBucket(), obj.ObjectName()))
+		gcsRef.SourceFormat = bigquery.JSON
+
+		loader := bqTable.LoaderFrom(gcsRef)
+		loader.WriteDisposition = bigquery.WriteAppend
+
+		loadJob, err := loader.Run(ctx)
+		if err != nil {
+			return err
+		}
+		log.Printf("BigQuery import running job %s", loadJob.ID())
+		status, err := loadJob.Wait(ctx)
+		log.Printf("BigQuery import job %s done", loadJob.ID())
+		if err != nil {
+			return err
+		}
+		if err = status.Err(); err != nil {
+			return err
+		}
+	}
+
+	// cleanup google storage
+	log.Printf("removing temp file %s/%s", cf.GSBucket(), obj.ObjectName())
+	if err = obj.Delete(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func Download(ctx context.Context, cf ConfigFile, r io.ReadCloser, token string, bkt *storage.BucketHandle, bqTable *bigquery.Table, quiet bool) error {
+
+	if r != nil {
+		// TODO: fix
+		sodareq := soda.NewGetRequest(cf.Dataset, token)
+		req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-App-Token", token)
+		log.Printf("streaming from %s", req.URL)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("got unexpected response %d", resp.StatusCode)
+		}
+		r = resp.Body
+	}
+
+	// stream to a google storage file
+	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), cf.DatasetID()+".json.gz"))
+	log.Printf("streaming to %s/%s", cf.GSBucket(), obj.ObjectName())
+	w := obj.NewWriter(ctx)
+	w.ObjectAttrs.ContentType = "application/json"
+	w.ObjectAttrs.ContentEncoding = "gzip"
+	gw := gzip.NewWriter(w)
+
+	rows, transformErr := TransformDownload(gw, r, cf.Schema, quiet, 0)
+	log.Printf("wrote %d rows to Google Storage", rows)
+	if transformErr != nil {
+		log.Printf("transformErr: %s", transformErr)
+	}
+	err := gw.Close()
+	if err != nil {
+		return err
+	}
+	err = w.Close()
+	if err != nil {
+		return err
+	}
+	r.Close()
 	if transformErr != nil {
 		return transformErr
 	}

@@ -5,35 +5,61 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	soda "github.com/SebastiaanKlippert/go-soda"
 )
 
-type Record map[string]interface{}
+// This is the "view" dict found in the download response format
+// i.e 'https://data.cityofnewyork.us/api/views/${ID}/rows.json?accessType=DOWNLOAD'
+type DownloadMeta struct {
+	soda.Metadata `json:"view"`
+}
 
-// Transform converts a JSON export from Socrata to a JSON valid for the target schema on BigQuery
-func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool, estRows uint64) (uint64, error) {
+// TransformDownload converts a JSON export from Socrata download a JSON valid for the target schema on BigQuery
+func TransformDownload(w io.Writer, r io.Reader, s TableSchema, quiet bool, estRows uint64) (uint64, error) {
 	dec := json.NewDecoder(r)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
+	dec.UseNumber()
 
 	// read open bracket
+	var err error
 	var rows uint64
-	_, err := dec.Token()
+	token := func() {
+		if err != nil {
+			return
+		}
+		_, err = dec.Token()
+	}
+	token() // {
+	token() // "meta"
 	if err != nil {
-		return rows, fmt.Errorf("initial token; rows %d %w", rows, err)
+		return rows, err
+	}
+	var metadata DownloadMeta
+	err = dec.Decode(&metadata)
+	if err != nil {
+		return rows, err
+	}
+
+	os := s.ToOrdered(metadata.Columns)
+
+	token() // "data"
+	token() // [
+	if err != nil {
+		return rows, err
 	}
 	start := time.Now()
 	for dec.More() {
 		rows += 1
-		var m Record
-		err := dec.Decode(&m)
+		var l ListRecord
+		err := dec.Decode(&l)
 		if err != nil {
 			return rows, fmt.Errorf("row %d %w", rows, err)
 		}
-		mm, err := TransformOne(m, s)
+		mm, err := TransformOneList(l, os)
 		if err != nil {
 			return rows, fmt.Errorf("row %d %w", rows, err)
 		}
@@ -46,27 +72,47 @@ func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool, estRows uint
 		if !quiet && rows%100000 == 0 {
 			duration := time.Since(start).Truncate(time.Second)
 			speed := duration / time.Duration(rows)
-			remain := estRows - rows
-			etr := (time.Duration(remain) * speed).Truncate(time.Second)
-			log.Printf("processed %d rows (%s). Remaining: %d rows (%s)", rows, duration, remain, etr)
+			if estRows == 0 {
+				log.Printf("processed %d rows (%s)", rows, duration)
+			} else {
+				remain := estRows - rows
+				etr := (time.Duration(remain) * speed).Truncate(time.Second)
+				log.Printf("processed %d rows (%s). Remaining: %d rows (%s)", rows, duration, remain, etr)
+			}
 		}
 	}
 	if !quiet && rows%100000 != 0 {
 		duration := time.Since(start).Truncate(time.Second)
 		log.Printf("processed %d rows (%s)", rows, duration)
 	}
-	// read the close bracket
-	_, err = dec.Token()
-	if err != nil {
-		return rows, err
-	}
-	return rows, nil
+	token() // close ]
+	token() // close }
+	return rows, err
 }
 
-func TransformOne(m Record, s TableSchema) (Record, error) {
-	out := make(Record, len(m))
-	for fieldName, schema := range s {
-		sourceValue := m[schema.SourceField]
+type ListRecord []interface{}
+
+func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
+	out := make(Record, len(l))
+	out["_id"] = l[0].(string)
+	// uuid
+	c, err := l[3].(json.Number).Int64()
+	if err != nil {
+		return nil, err
+	}
+	out["_created_at"] = time.Unix(c, 0).Format(time.RFC3339)
+	// cteated_meta
+	c, err = l[5].(json.Number).Int64()
+	if err != nil {
+		return nil, err
+	}
+	out["_updated_at"] = time.Unix(c, 0).Format(time.RFC3339)
+	// updated_meta
+	// :meta
+
+	for i, sourceValue := range l[5:] {
+		schema := s[i]
+		fieldName := schema.FieldName
 		var err error
 		switch schema.Type {
 		case bigquery.NumericFieldType:
@@ -74,7 +120,7 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		case bigquery.StringFieldType:
 			switch schema.SourceFieldType {
 			case "url":
-				out[fieldName] = sourceValue.(map[string]interface{})["url"]
+				out[fieldName] = sourceValue.([]interface{})[0]
 			case "text", "":
 				out[fieldName] = sourceValue
 				if schema.Required {
@@ -130,45 +176,4 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		}
 	}
 	return out, nil
-}
-
-func ToGeoJSON(v interface{}) (interface{}, error) {
-	// {"type":"Point","coordinates":[-73.96481,40.633247]}
-	// TODO: validate that this is a simple geo; Point, LineString, etc
-	if v == nil {
-		return nil, nil
-	}
-	b, err := json.Marshal(v)
-	return string(b), err
-}
-
-func ToDate(format, s string) (interface{}, error) {
-	if s == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(format, s)
-	if err != nil {
-		return nil, err
-	}
-	return t.Format("2006-01-02"), nil
-}
-
-func ToTime(format, s string) (interface{}, error) {
-	if s == "" {
-		return nil, nil
-	}
-	// lower string and format
-	format = strings.ToLower(format)
-	s = strings.ToLower(s)
-
-	// convert a format of "0301p" -> "0301pm"
-	if strings.HasSuffix(format, "p") {
-		s = s + "m"
-		format = format + "m"
-	}
-	t, err := time.Parse(format, s)
-	if err != nil {
-		return nil, err
-	}
-	return t.Format("15:04:05"), nil
 }

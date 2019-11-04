@@ -29,7 +29,30 @@ type SchemaField struct {
 	OnError         OnError            `comment:"SKIP_VALUE | SKIP_ROW | ERROR " toml:"on_error,omitempty"`
 	ExampleValues   string             `commented:"true" toml:"example_values,omitempty"`
 }
+
+type OrderedSchemaField struct {
+	FieldName string
+	SchemaField
+}
+
 type TableSchema map[string]SchemaField
+type OrderedTableSchema []OrderedSchemaField
+
+func (ts TableSchema) ToOrdered(c []soda.Column) OrderedTableSchema {
+	var o []OrderedSchemaField
+	for _, cc := range c {
+		for fn, ss := range ts {
+			if ss.SourceField == cc.FieldName {
+				o = append(o, OrderedSchemaField{
+					FieldName:   fn,
+					SchemaField: ss,
+				})
+				break
+			}
+		}
+	}
+	return o
+}
 
 type Config struct {
 	Dataset                 string `comment:"The URL to the Socrata dataset"`
