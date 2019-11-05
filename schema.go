@@ -41,6 +41,35 @@ type OrderedTableSchema []OrderedSchemaField
 func (ts TableSchema) ToOrdered(c []soda.Column) OrderedTableSchema {
 	var o []OrderedSchemaField
 	for _, cc := range c {
+		if cc.ID == -1 {
+			var target string
+			var targetType bigquery.FieldType
+			var sourceType string
+			switch cc.FieldName {
+			case ":sid":
+				target = "_id"
+				targetType = bigquery.StringFieldType
+				sourceType = "text"
+			case ":created_at":
+				target = "_created_at"
+				targetType = bigquery.TimestampFieldType
+				sourceType = "json.Number"
+			case ":updated_at":
+				target = "_updated_at"
+				targetType = bigquery.TimestampFieldType
+				sourceType = "json.Number"
+			}
+			o = append(o, OrderedSchemaField{
+				FieldName: target,
+				SchemaField: SchemaField{
+					SourceField:     cc.FieldName,
+					SourceFieldType: sourceType,
+					Type:            targetType,
+				},
+			})
+
+			continue
+		}
 		for fn, ss := range ts {
 			if ss.SourceField == cc.FieldName {
 				o = append(o, OrderedSchemaField{

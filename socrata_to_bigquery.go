@@ -88,6 +88,7 @@ func downloadCmd(args []string) {
 		var r io.ReadCloser
 		if *downloadFile != "" {
 			var err error
+			log.Printf("opening %s", *downloadFile)
 			r, err = os.Open(*downloadFile)
 			if err != nil {
 				log.Fatal(err)
@@ -394,7 +395,7 @@ func CopyChunk(ctx context.Context, cf ConfigFile, token, where string, offset, 
 
 func Download(ctx context.Context, cf ConfigFile, r io.ReadCloser, token string, bkt *storage.BucketHandle, bqTable *bigquery.Table, quiet bool) error {
 
-	if r != nil {
+	if r == nil {
 		// TODO: fix
 		sodareq := soda.NewGetRequest(cf.Dataset, token)
 		req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
@@ -438,6 +439,7 @@ func Download(ctx context.Context, cf ConfigFile, r io.ReadCloser, token string,
 	if transformErr != nil {
 		return transformErr
 	}
+	// os.Exit(1)
 
 	if rows != 0 {
 		// load into bigquery

@@ -80,6 +80,10 @@ func TransformDownload(w io.Writer, r io.Reader, s TableSchema, quiet bool, estR
 				log.Printf("processed %d rows (%s). Remaining: %d rows (%s)", rows, duration, remain, etr)
 			}
 		}
+		// // FIXME: temp debugging limit
+		// if rows == 100000 {
+		// 	return rows, nil
+		// }
 	}
 	if !quiet && rows%100000 != 0 {
 		duration := time.Since(start).Truncate(time.Second)
@@ -94,35 +98,34 @@ type ListRecord []interface{}
 
 func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 	out := make(Record, len(l))
-	out["_id"] = l[0].(string)
-	// uuid
-	c, err := l[3].(json.Number).Int64()
-	if err != nil {
-		return nil, err
-	}
-	out["_created_at"] = time.Unix(c, 0).Format(time.RFC3339)
-	// cteated_meta
-	c, err = l[5].(json.Number).Int64()
-	if err != nil {
-		return nil, err
-	}
-	out["_updated_at"] = time.Unix(c, 0).Format(time.RFC3339)
-	// updated_meta
-	// :meta
-
-	for i, sourceValue := range l[5:] {
+	// log.Printf("%#v", l)
+	for i, sourceValue := range l {
 		schema := s[i]
 		fieldName := schema.FieldName
+		if fieldName == "" {
+			continue
+		}
+		// log.Printf("[%d] %q <- %q:%#v", i, fieldName, schema.SourceField, sourceValue )
 		var err error
 		switch schema.Type {
 		case bigquery.NumericFieldType:
-			out[fieldName] = sourceValue
+			switch schema.SourceFieldType {
+			case "number":
+				if s, ok := sourceValue.(string); ok && s != "" {
+					out[fieldName] = json.Number(s)
+				}
+			default:
+				out[fieldName] = sourceValue
+			}
 		case bigquery.StringFieldType:
 			switch schema.SourceFieldType {
 			case "url":
 				out[fieldName] = sourceValue.([]interface{})[0]
 			case "text", "":
-				out[fieldName] = sourceValue
+				if sourceValue != nil {
+					out[fieldName] = sourceValue
+
+				}
 				if schema.Required {
 					if sv, ok := sourceValue.(string); ok && sv == "" || sourceValue == nil {
 						err = fmt.Errorf("missing required field %q", fieldName)
@@ -157,8 +160,17 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 				err = fmt.Errorf("missing required field %q", fieldName)
 			}
 		case bigquery.TimestampFieldType:
-			out[fieldName] = sourceValue
-			// TODO: improve conversion
+			switch schema.SourceFieldType {
+			case "json.Number":
+				var c int64
+				c, err = sourceValue.(json.Number).Int64()
+				if err == nil {
+					out[fieldName] = time.Unix(c, 0).Format(time.RFC3339)
+				}
+			default:
+				// TODO: improve conversion
+				out[fieldName] = sourceValue
+			}
 		default:
 			return nil, fmt.Errorf("unhandled BigQuery type %q for field %q", schema.Type, fieldName)
 		}
