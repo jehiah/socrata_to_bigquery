@@ -159,5 +159,5 @@ func downloadOne(configFile string, quiet bool, r io.ReadCloser, token string) {
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
 
 	Download(ctx, cf, r, token, bkt, bqTable, quiet)
-	fmt.Printf("done")
+	fmt.Printf("done\n")
 }
