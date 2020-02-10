@@ -15,25 +15,29 @@ import (
 )
 
 func initDataset(args []string) {
-	initFlagSet := flag.NewFlagSet("init", flag.ExitOnError)
-	dataset := initFlagSet.String("dataset", "", "The URL to the socrata dataset")
+	initFlagSet := flag.NewFlagSet(fmt.Sprintf("%s init", os.Args[0]), flag.ExitOnError)
+	apiEndpoint := initFlagSet.String("api-endpoint", "", "The URL to the socrata dataset")
 	token := initFlagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
 	debug := initFlagSet.Bool("debug", false, "show debug output")
 	dataDir := initFlagSet.String("data-dir", "", "directory to create config file in")
 	fn := initFlagSet.String("filename", "", "defaults to ${NAME}-${ID}.toml")
+	bqProject := initFlagSet.String("project-id", "", "Google Cloud Project ID")
+	bqDataset := initFlagSet.String("bq-dataset", "", "BigQuery Dataset")
 	initFlagSet.Parse(args)
 
-	if *dataset == "" {
-		log.Fatal("missing --dataset")
+	if *apiEndpoint == "" {
+		fmt.Fprintln(os.Stderr, "missing --api-endpoint")
+		os.Exit(1)
 	}
 	if *token == "" {
 		*token = os.Getenv("SOCRATA_APP_TOKEN")
 	}
 	if *token == "" {
-		log.Fatal("missing --socrata-app-token or environment variable SOCRATA_APP_TOKEN")
+		fmt.Fprintln(os.Stderr, "missing --socrata-app-token or environment variable SOCRATA_APP_TOKEN")
+		os.Exit(1)
 	}
 
-	sodareq := soda.NewGetRequest(*dataset, *token)
+	sodareq := soda.NewGetRequest(*apiEndpoint, *token)
 	// ":*" includes metadata records :id, :created_at, :updated_at, :version
 	sodareq.Query.Select = []string{":*", "*"}
 	md, err := sodareq.Metadata.Get()
@@ -60,7 +64,9 @@ func initDataset(args []string) {
 	}
 	defer f.Close()
 	encoder := toml.NewEncoder(f)
-	c := NewConfig(*dataset, *md)
+	c := NewConfig(*apiEndpoint, *md)
+	c.BigQuery.ProjectID = *bqProject
+	c.BigQuery.DatasetName = *bqDataset
 	encoder.Encode(c)
 	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, MustExampleRecords(*sodareq))})
 }
