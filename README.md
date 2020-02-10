@@ -2,6 +2,8 @@
 
 This tool facilitates replicating Open Data from the [Socrata Platform](https://socrata.com/) to [Google BigQuery](https://cloud.google.com/bigquery/)
 
+<div style="color:red"><strong>WARNING:</strong> This is Alpha Release Software. It might be useful, but it will be rough around the edges</div>
+
 Many Governemnt Open-Data projects are hosted on Socrata, and searchable through the [Open Data Network](https://www.opendatanetwork.com/)
 
 * https://opendata.cityofnewyork.us/
