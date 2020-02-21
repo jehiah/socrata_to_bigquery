@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"net/url"
 
 	"cloud.google.com/go/bigquery"
 	soda "github.com/SebastiaanKlippert/go-soda"
@@ -115,6 +116,15 @@ func (cf ConfigFile) DatasetID() string {
 	c := strings.Split(cf.Dataset, "/")
 	return c[len(c)-1]
 }
+func (cf ConfigFile) APIBase() *url.URL {
+	u, err := url.Parse(cf.Dataset)
+	if err != nil {
+		panic(err.Error())
+	}
+	u.Path = "/"
+	return u
+}
+
 
 func LoadConfigFile(name string) (ConfigFile, error) {
 	var cf ConfigFile

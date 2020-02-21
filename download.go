@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -19,9 +20,11 @@ import (
 func Download(ctx context.Context, cf ConfigFile, r io.ReadCloser, token string, bkt *storage.BucketHandle, bqTable *bigquery.Table, quiet bool) error {
 
 	if r == nil {
-		// TODO: fix
-		sodareq := soda.NewGetRequest(cf.Dataset, token)
-		req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
+		// i.e 'https://data.cityofnewyork.us/api/views/${ID}/rows.json?accessType=DOWNLOAD'
+		api := cf.APIBase()
+		api.Path = fmt.Sprintf("/api/views/%s/rows.json", url.PathEscape(cf.DatasetID()))
+		api.RawQuery = "accessType=DOWNLOAD"
+		req, err := http.NewRequest("GET", api.String(), nil)
 		if err != nil {
 			return err
 		}
@@ -99,6 +102,9 @@ func downloadOne(configFile string, quiet bool, r io.ReadCloser, token string) {
 	cf, err := LoadConfigFile(configFile)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if cf.GoogleStorageBucketName == "" {
+		log.Fatalf("missing GoogleStorageBucketName in %q", configFile)
 	}
 
 	// todo Validate

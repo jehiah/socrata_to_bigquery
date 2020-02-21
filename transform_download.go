@@ -73,11 +73,11 @@ func TransformDownload(w io.Writer, r io.Reader, s TableSchema, quiet bool, estR
 			duration := time.Since(start).Truncate(time.Second)
 			speed := duration / time.Duration(rows)
 			if estRows == 0 {
-				log.Printf("processed %d rows (%s)", rows, duration)
+				fmt.Printf("processed %d rows (%s)\n", rows, duration)
 			} else {
 				remain := estRows - rows
 				etr := (time.Duration(remain) * speed).Truncate(time.Second)
-				log.Printf("processed %d rows (%s). Remaining: %d rows (%s)", rows, duration, remain, etr)
+				fmt.Printf("processed %d rows (%s). Remaining: %d rows (%s)\n", rows, duration, remain, etr)
 			}
 		}
 		// // FIXME: temp debugging limit
@@ -87,7 +87,7 @@ func TransformDownload(w io.Writer, r io.Reader, s TableSchema, quiet bool, estR
 	}
 	if !quiet && rows%100000 != 0 {
 		duration := time.Since(start).Truncate(time.Second)
-		log.Printf("processed %d rows (%s)", rows, duration)
+		fmt.Printf("processed %d rows (%s)\n", rows, duration)
 	}
 	token() // close ]
 	token() // close }
