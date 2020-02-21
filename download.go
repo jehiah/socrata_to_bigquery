@@ -26,7 +26,7 @@ func Download(ctx context.Context, cf ConfigFile, r io.ReadCloser, token string,
 			return err
 		}
 		req.Header.Set("X-App-Token", token)
-		fmt.Printf("Streaming from %s", req.URL)
+		fmt.Printf("Streaming from %s\n", req.URL)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return err
@@ -39,14 +39,14 @@ func Download(ctx context.Context, cf ConfigFile, r io.ReadCloser, token string,
 
 	// stream to a google storage file
 	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), cf.DatasetID()+".json.gz"))
-	fmt.Printf("streaming to %s/%s", cf.GSBucket(), obj.ObjectName())
+	fmt.Printf("streaming to %s/%s\n", cf.GSBucket(), obj.ObjectName())
 	w := obj.NewWriter(ctx)
 	w.ObjectAttrs.ContentType = "application/json"
 	w.ObjectAttrs.ContentEncoding = "gzip"
 	gw := gzip.NewWriter(w)
 
 	rows, transformErr := TransformDownload(gw, r, cf.Schema, quiet, 0)
-	fmt.Printf("wrote %d rows to Google Storage", rows)
+	fmt.Printf("wrote %d rows to Google Storage\n", rows)
 	if transformErr != nil {
 		log.Printf("transformErr: %s", transformErr)
 	}
@@ -76,9 +76,9 @@ func Download(ctx context.Context, cf ConfigFile, r io.ReadCloser, token string,
 		if err != nil {
 			return err
 		}
-		fmt.Printf("BigQuery import running job %s", loadJob.ID())
+		fmt.Printf("BigQuery import running job %s\n", loadJob.ID())
 		status, err := loadJob.Wait(ctx)
-		fmt.Printf("BigQuery import job %s done", loadJob.ID())
+		fmt.Printf("BigQuery import job %s done\n", loadJob.ID())
 		if err != nil {
 			return err
 		}
@@ -112,7 +112,7 @@ func downloadOne(configFile string, quiet bool, r io.ReadCloser, token string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Socrata: %s (%s) last modified %v", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
+	fmt.Printf("Socrata: %s (%s) last modified %v\n", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
 
 	ctx := context.Background()
 	bqclient, err := bigquery.NewClient(ctx, cf.BigQuery.ProjectID)
@@ -125,14 +125,14 @@ func downloadOne(configFile string, quiet bool, r io.ReadCloser, token string) {
 		// TODO: dataset doesn't exist? require that first?
 		log.Fatalf("Error fetching BigQuery dataset %s.%s err %s", cf.BigQuery.ProjectID, cf.BigQuery.DatasetName, err)
 	}
-	fmt.Printf("BQ Dataset %s OK (last modified %s)", dmd.FullID, dmd.LastModifiedTime)
+	fmt.Printf("BQ Dataset %s OK (last modified %s)\n", dmd.FullID, dmd.LastModifiedTime)
 
 	bqTable := dataset.Table(cf.BigQuery.TableName)
 	tmd, err := bqTable.Metadata(ctx)
 	if err != nil {
 		if e, ok := err.(*googleapi.Error); ok {
 			if e.Code == 404 {
-				log.Printf("Auto-creating table %s", e.Message)
+				log.Printf("Auto-creating table %s\n", e.Message)
 				if err := bqTable.Create(ctx, &bigquery.TableMetadata{
 					Name:        cf.BigQuery.TableName,
 					Description: cf.BigQuery.Description,
@@ -150,7 +150,7 @@ func downloadOne(configFile string, quiet bool, r io.ReadCloser, token string) {
 	if tmd == nil {
 		log.Fatalf("Error fetching BigQuery Table %s.%s %s", dmd.FullID, md.ID, err)
 	}
-	fmt.Printf("BQ Table %s OK (last modified %s)", tmd.FullID, tmd.LastModifiedTime)
+	fmt.Printf("BQ Table %s OK (last modified %s)\n", tmd.FullID, tmd.LastModifiedTime)
 
 	client, err := storage.NewClient(ctx)
 	if err != nil {
