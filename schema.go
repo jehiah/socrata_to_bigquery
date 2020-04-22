@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
-	"net/url"
 
 	"cloud.google.com/go/bigquery"
 	soda "github.com/SebastiaanKlippert/go-soda"
@@ -124,7 +124,6 @@ func (cf ConfigFile) APIBase() *url.URL {
 	u.Path = "/"
 	return u
 }
-
 
 func LoadConfigFile(name string) (ConfigFile, error) {
 	var cf ConfigFile

@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"strconv"
 
 	"cloud.google.com/go/bigquery"
 )
@@ -70,7 +71,14 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		var err error
 		switch schema.Type {
 		case bigquery.NumericFieldType:
-			out[fieldName] = sourceValue
+			switch schema.SourceFieldType {
+			case "text":
+				if sourceValue != nil {
+					out[fieldName], err = strconv.ParseFloat(strings.ReplaceAll(sourceValue.(string), ",", ""), 64)
+				}
+			default:
+				out[fieldName] = sourceValue
+			}
 		case bigquery.StringFieldType:
 			switch schema.SourceFieldType {
 			case "url":
