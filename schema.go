@@ -71,14 +71,20 @@ func (ts TableSchema) ToOrdered(c []soda.Column) OrderedTableSchema {
 
 			continue
 		}
+		var found bool
 		for fn, ss := range ts {
 			if ss.SourceField == cc.FieldName {
 				o = append(o, OrderedSchemaField{
 					FieldName:   fn,
 					SchemaField: ss,
 				})
+				found = true
 				break
 			}
+		}
+		if !found {
+			// marker to skip transform field
+			o = append(o, OrderedSchemaField{})
 		}
 	}
 	return o

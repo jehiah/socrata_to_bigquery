@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
-	"strconv"
 
 	"cloud.google.com/go/bigquery"
 )
@@ -138,6 +138,13 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		}
 	}
 	return out, nil
+}
+
+func MustGeoJSON(v interface{}, err error) interface{} {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func ToGeoJSON(v interface{}) (interface{}, error) {

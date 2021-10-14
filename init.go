@@ -108,6 +108,8 @@ func ExampleRecords(sr soda.GetRequest) (map[string]string, error) {
 			case map[string]interface{}:
 				if u, ok := v["url"]; ok && u != nil {
 					buffer[k] = append(buffer[k], u.(string))
+				} else if gt, ok := v["type"]; ok && gt.(string) == "Point" {
+					buffer[k] = append(buffer[k], MustGeoJSON(ToGeoJSON(v)).(string))
 				} else {
 					log.Printf("unhandled type %T %#v", v, v)
 				}

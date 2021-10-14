@@ -105,7 +105,7 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 		if fieldName == "" {
 			continue
 		}
-		// log.Printf("[%d] %q <- %q:%#v", i, fieldName, schema.SourceField, sourceValue )
+		// log.Printf("[%d] %q <- %q:%#v", i, fieldName, schema.SourceField, sourceValue)
 		var err error
 		switch schema.Type {
 		case bigquery.NumericFieldType:
