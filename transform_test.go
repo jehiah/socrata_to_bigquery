@@ -59,10 +59,10 @@ import (
 // 	}
 // }
 
-func TestToGeoJSON(t *testing.T) {
+func TestToGeoJSONPoint(t *testing.T) {
 	var m interface{}
 	json.Unmarshal([]byte(`{"type":"Point","coordinates":[-73.96481,40.633247]}`), &m)
-	got, _ := ToGeoJSON(m)
+	got, _ := ToGeoJSONPoint(m)
 	t.Logf("%s", got)
 	if got.(string) != "{\"coordinates\":[-73.96481,40.633247],\"type\":\"Point\"}" {
 		t.Fatalf("err got %q", got)

@@ -70,7 +70,7 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		sourceValue := m[schema.SourceField]
 		var err error
 		switch schema.Type {
-		case bigquery.NumericFieldType:
+		case bigquery.NumericFieldType, bigquery.FloatFieldType:
 			switch schema.SourceFieldType {
 			case "text":
 				if sourceValue != nil {
@@ -97,7 +97,7 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		case bigquery.GeographyFieldType:
 			switch schema.SourceFieldType {
 			case "point":
-				out[fieldName], err = ToGeoJSON(sourceValue)
+				out[fieldName], err = ToGeoJSONPoint(sourceValue)
 			default:
 				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
@@ -118,7 +118,7 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 			} else if schema.Required {
 				err = fmt.Errorf("missing required field %q", fieldName)
 			}
-		case bigquery.TimestampFieldType:
+		case bigquery.TimestampFieldType, bigquery.DateTimeFieldType:
 			out[fieldName] = sourceValue
 			// TODO: improve conversion
 		default:
@@ -147,13 +147,49 @@ func MustGeoJSON(v interface{}, err error) interface{} {
 	return v
 }
 
-func ToGeoJSON(v interface{}) (interface{}, error) {
+func ToGeoJSONPoint(v interface{}) (interface{}, error) {
 	// {"type":"Point","coordinates":[-73.96481,40.633247]}
 	// TODO: validate that this is a simple geo; Point, LineString, etc
 	if v == nil {
 		return nil, nil
 	}
 	b, err := json.Marshal(v)
+	return string(b), err
+}
+func ToGeoJSONLocation(v interface{}) (interface{}, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var p interface{}
+	switch m := v.(type) {
+	case []interface{}:
+		// []interface {}{"{\"address\": \"\", \"city\": \"\", \"state\": \"\", \"zip\": \"\"}", "40.79634697983548", "-73.97053598278849", interface {}(nil), false}
+		var lat, lon json.Number
+		if s, ok := m[1].(string); ok {
+			lat = json.Number(s)
+		} else if !ok {
+			return nil, nil
+		}
+		if s, ok := m[2].(string); ok {
+			lon = json.Number(s)
+		} else if !ok {
+			return nil, nil
+		}
+		p = map[string]interface{}{
+			"type":        "Point",
+			"coordinates": []interface{}{lon, lat},
+		}
+	case map[string]interface{}:
+		// map[string]interface {}{"human_address":"{\"address\": \"\", \"city\": \"\", \"state\": \"\", \"zip\": \"\"}", "latitude":"40.60763791400439", "longitude":"-73.92158534567228"}
+		lat, lon := m["latitude"].(string), m["longitude"].(string)
+		p = map[string]interface{}{
+			"type":        "Point",
+			"coordinates": []interface{}{json.Number(lon), json.Number(lat)},
+		}
+	default:
+		return nil, fmt.Errorf("ToGeoJSONLocation: unhandled type %T %#v", v, v)
+	}
+	b, err := json.Marshal(p)
 	return string(b), err
 }
 

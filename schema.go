@@ -171,8 +171,10 @@ func GuessBQType(t, name string) (bigquery.FieldType, string) {
 	case "number":
 		return bigquery.NumericFieldType, ""
 	case "calendar_date":
-		return bigquery.DateFieldType, "2006-01-02T00:00:00.000"
+		return bigquery.DateTimeFieldType, "2006-01-02T15:04:05.000"
 	case "point":
+		return bigquery.GeographyFieldType, ""
+	case "location":
 		return bigquery.GeographyFieldType, ""
 	}
 	panic(fmt.Sprintf("unknown type %q", t))

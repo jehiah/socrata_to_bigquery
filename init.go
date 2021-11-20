@@ -109,7 +109,9 @@ func ExampleRecords(sr soda.GetRequest) (map[string]string, error) {
 				if u, ok := v["url"]; ok && u != nil {
 					buffer[k] = append(buffer[k], u.(string))
 				} else if gt, ok := v["type"]; ok && gt.(string) == "Point" {
-					buffer[k] = append(buffer[k], MustGeoJSON(ToGeoJSON(v)).(string))
+					buffer[k] = append(buffer[k], MustGeoJSON(ToGeoJSONPoint(v)).(string))
+				} else if _, ok := v["human_address"]; ok {
+					buffer[k] = append(buffer[k], MustGeoJSON(ToGeoJSONLocation(v)).(string))
 				} else {
 					log.Printf("unhandled type %T %#v", v, v)
 				}

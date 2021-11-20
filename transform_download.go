@@ -108,7 +108,7 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 		// log.Printf("[%d] %q <- %q:%#v", i, fieldName, schema.SourceField, sourceValue)
 		var err error
 		switch schema.Type {
-		case bigquery.NumericFieldType:
+		case bigquery.NumericFieldType, bigquery.FloatFieldType:
 			switch schema.SourceFieldType {
 			case "number":
 				if s, ok := sourceValue.(string); ok && s != "" {
@@ -138,7 +138,9 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 		case bigquery.GeographyFieldType:
 			switch schema.SourceFieldType {
 			case "point":
-				out[fieldName], err = ToGeoJSON(sourceValue)
+				out[fieldName], err = ToGeoJSONPoint(sourceValue)
+			case "location":
+				out[fieldName], err = ToGeoJSONLocation(sourceValue)
 			default:
 				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
@@ -159,7 +161,7 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 			} else if schema.Required {
 				err = fmt.Errorf("missing required field %q", fieldName)
 			}
-		case bigquery.TimestampFieldType:
+		case bigquery.TimestampFieldType, bigquery.DateTimeFieldType:
 			switch schema.SourceFieldType {
 			case "json.Number":
 				var c int64
