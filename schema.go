@@ -176,6 +176,8 @@ func GuessBQType(t, name string) (bigquery.FieldType, string) {
 		return bigquery.GeographyFieldType, ""
 	case "location":
 		return bigquery.GeographyFieldType, ""
+	case "checkbox":
+		return bigquery.BooleanFieldType, ""
 	}
 	panic(fmt.Sprintf("unknown type %q", t))
 }

@@ -173,16 +173,18 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 				// TODO: improve conversion
 				out[fieldName] = sourceValue
 			}
+		case bigquery.BooleanFieldType:
+			out[fieldName] = sourceValue.(bool)
 		default:
-			return nil, fmt.Errorf("unhandled BigQuery type %q for field %q", schema.Type, fieldName)
+			return nil, fmt.Errorf("unhandled BigQuery type %q for field %q value %T %#v", schema.Type, fieldName, sourceValue, sourceValue)
 		}
 		if err != nil {
 			switch schema.OnError {
 			case SkipValue:
-				log.Printf("skipping invalid value %q in field %q %w", sourceValue, schema.SourceField, err)
+				log.Printf("skipping invalid value %q in field %q %v", sourceValue, schema.SourceField, err)
 				out[fieldName] = nil
 			case SkipRow, "":
-				log.Printf("skipping row. invalid value %q in field %q %w", sourceValue, schema.SourceField, err)
+				log.Printf("skipping row. invalid value %q in field %q %v", sourceValue, schema.SourceField, err)
 				return nil, nil
 			case RaiseError:
 				return nil, err

@@ -121,8 +121,10 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		case bigquery.TimestampFieldType, bigquery.DateTimeFieldType:
 			out[fieldName] = sourceValue
 			// TODO: improve conversion
+		case bigquery.BooleanFieldType:
+			out[fieldName] = sourceValue.(bool)
 		default:
-			return nil, fmt.Errorf("unhandled BigQuery type %q for field %q", schema.Type, fieldName)
+			return nil, fmt.Errorf("unhandled BigQuery type %q for field %q value %T %#v", schema.Type, fieldName, sourceValue, sourceValue)
 		}
 		if err != nil {
 			switch schema.OnError {
