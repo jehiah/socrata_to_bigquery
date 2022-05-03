@@ -131,10 +131,10 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		if err != nil {
 			switch schema.OnError {
 			case SkipValue:
-				log.Printf("skipping invalid value %q in field %q %w", sourceValue, schema.SourceField, err)
+				log.Printf("skipping invalid value %q in field %q %s", sourceValue, schema.SourceField, err)
 				out[fieldName] = nil
 			case SkipRow, "":
-				log.Printf("skipping row. invalid value %q in field %q %w", sourceValue, schema.SourceField, err)
+				log.Printf("skipping row. invalid value %q in field %q %s", sourceValue, schema.SourceField, err)
 				return nil, nil
 			case RaiseError:
 				return nil, err
@@ -185,7 +185,11 @@ func ToGeoJSONLocation(v interface{}) (interface{}, error) {
 		}
 	case map[string]interface{}:
 		// map[string]interface {}{"human_address":"{\"address\": \"\", \"city\": \"\", \"state\": \"\", \"zip\": \"\"}", "latitude":"40.60763791400439", "longitude":"-73.92158534567228"}
-		lat, lon := m["latitude"].(string), m["longitude"].(string)
+		lat, oklat := m["latitude"].(string)
+		lon, oklon := m["longitude"].(string)
+		if !oklat || !oklon {
+			return nil, nil
+		}
 		p = map[string]interface{}{
 			"type":        "Point",
 			"coordinates": []interface{}{json.Number(lon), json.Number(lat)},
