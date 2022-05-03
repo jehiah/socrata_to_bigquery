@@ -98,6 +98,8 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 			switch schema.SourceFieldType {
 			case "point":
 				out[fieldName], err = ToGeoJSONPoint(sourceValue)
+			case "location":
+				out[fieldName], err = ToGeoJSONLocation(sourceValue)
 			default:
 				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
