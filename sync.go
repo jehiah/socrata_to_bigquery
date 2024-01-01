@@ -19,7 +19,7 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-func syncOne(configFile string, quiet bool, token string) {
+func syncOne(configFile string, quiet bool, token string, pageSize uint64) {
 	cf, err := LoadConfigFile(configFile)
 	if err != nil {
 		log.Fatal(err)
@@ -136,9 +136,6 @@ func syncOne(configFile string, quiet bool, token string) {
 		log.Fatal(err)
 	}
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
-	// https://support.socrata.com/hc/en-us/requests/37801
-	// Socrata suggested 1M was too large a sync value
-	pageSize := uint64(500000)
 	throttle := NewConcurrentLimit(2)
 	var wg sync.WaitGroup
 	for n := uint64(0); n < missing; n += pageSize {

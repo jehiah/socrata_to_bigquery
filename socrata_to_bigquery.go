@@ -44,6 +44,9 @@ func main() {
 func syncCmd(args []string) {
 	flagSet := flag.NewFlagSet(fmt.Sprintf("%s sync", os.Args[0]), flag.ExitOnError)
 	quiet := flagSet.Bool("quiet", false, "disable progress output")
+	// https://support.socrata.com/hc/en-us/requests/37801
+	// Socrata suggested 1M was too large a sync value
+	pageSize := flagSet.Uint64("page-size", 500000, "socrata result set size")
 	token := flagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
 	// limit := flag.Int("limit", 100000000, "limit")
 	// where := flag.String("where", "", "$where clause")
@@ -61,7 +64,7 @@ func syncCmd(args []string) {
 		os.Exit(1)
 	}
 	for _, configFile := range flagSet.Args() {
-		syncOne(configFile, *quiet, *token)
+		syncOne(configFile, *quiet, *token, *pageSize)
 	}
 }
 
