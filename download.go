@@ -109,16 +109,20 @@ func downloadOne(configFile string, quiet bool, r io.ReadCloser, token string) {
 
 	// todo Validate
 	// bg-project-id, etc
-
 	sodareq := soda.NewGetRequest(cf.Dataset, token)
 	sodareq.Query.Select = []string{":*", "*"}
 	md, err := sodareq.Metadata.Get()
 	// https://data.cityofnewyork.us/api/views/${ID}/rows.json?accessType=DOWNLOAD
 
 	if err != nil {
-		log.Fatal(err)
+		if r == nil {
+			log.Fatal(err)
+		} else {
+			log.Printf("%s", err)
+		}
+	} else {
+		fmt.Printf("Socrata: %s (%s) last modified %v\n", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
 	}
-	fmt.Printf("Socrata: %s (%s) last modified %v\n", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
 
 	ctx := context.Background()
 	bqclient, err := bigquery.NewClient(ctx, cf.BigQuery.ProjectID)

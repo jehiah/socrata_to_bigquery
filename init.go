@@ -133,6 +133,8 @@ func ExampleRecords(data []map[string]interface{}) map[string]string {
 				buffer[k] = append(buffer[k], fmt.Sprintf("%q", v))
 			case int, int64:
 				buffer[k] = append(buffer[k], fmt.Sprintf("%d", v))
+			case float64:
+				buffer[k] = append(buffer[k], fmt.Sprintf("%f", v))
 			case bool:
 				buffer[k] = append(buffer[k], fmt.Sprintf("%v", v))
 			case map[string]interface{}:
@@ -145,6 +147,7 @@ func ExampleRecords(data []map[string]interface{}) map[string]string {
 				} else {
 					log.Printf("unhandled type %T %#v", v, v)
 				}
+			case nil:
 			default:
 				log.Printf("unhandled type %T %#v", v, v)
 			}

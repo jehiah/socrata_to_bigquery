@@ -210,6 +210,14 @@ func NewSchema(s soda.Metadata, examples map[string]string) TableSchema {
 		},
 	}
 	for _, c := range s.Columns {
+		switch c.FieldName {
+		case ":id", ":created_at", ":updated_at", ":version":
+			continue
+		}
+		switch c.DataTypeName {
+		case "meta_data":
+			continue
+		}
 		fieldType, timeFormat := GuessBQType(c.DataTypeName, c.FieldName)
 		var oe OnError
 		if timeFormat != "" {
