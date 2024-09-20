@@ -60,13 +60,43 @@ import (
 // }
 
 func TestToGeoJSONPoint(t *testing.T) {
-	var m interface{}
-	json.Unmarshal([]byte(`{"type":"Point","coordinates":[-73.96481,40.633247]}`), &m)
-	got, _ := ToGeoJSONPoint(m)
-	t.Logf("%s", got)
-	if got.(string) != "{\"coordinates\":[-73.96481,40.633247],\"type\":\"Point\"}" {
-		t.Fatalf("err got %q", got)
+	type testCase struct {
+		have   any
+		expect string
 	}
+	u := func(s string) interface{} {
+		var m interface{}
+		json.Unmarshal([]byte(s), &m)
+		return m
+	}
+
+	tests := []testCase{
+		{u(`{"type":"Point","coordinates":[-73.96481,40.633247]}`), `{"coordinates":[-73.96481,40.633247],"type":"Point"}`},
+		{`POINT (-73.921794 40.610106)`, `{"coordinates":[-73.921794,40.610106],"type":"Point"}`},
+	}
+	for i, tc := range tests {
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			t.Logf("%#v", tc)
+			got, err := ToGeoJSONPoint(tc.have)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g, ok := got.(string); !ok {
+				t.Fatalf("got %#v not %q", got, tc.expect)
+			} else if g != tc.expect {
+				t.Fatalf("got %q not %q", g, tc.expect)
+			}
+		})
+	}
+
+	// var m interface{}
+	// json.Unmarshal([]byte(`{"type":"Point","coordinates":[-73.96481,40.633247]}`), &m)
+	// got, _ := ToGeoJSONPoint(m)
+	// t.Logf("%s", got)
+	// if got.(string) != "{\"coordinates\":[-73.96481,40.633247],\"type\":\"Point\"}" {
+	// 	t.Fatalf("err got %q", got)
+	// }
+
 }
 
 func TestToTime(t *testing.T) {

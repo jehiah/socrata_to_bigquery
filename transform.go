@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,12 @@ func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool, estRows uint
 	return rows, nil
 }
 
+func roundToPrecision(value float64, precision int) float64 {
+	// Multiply by 10^precision, round, and then divide by 10^precision
+	factor := math.Pow(10, float64(precision))
+	return math.Round(value*factor) / factor
+}
+
 func TransformOne(m Record, s TableSchema) (Record, error) {
 	out := make(Record, len(m))
 	for fieldName, schema := range s {
@@ -75,6 +82,12 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 			case "text":
 				if sourceValue != nil {
 					out[fieldName], err = strconv.ParseFloat(strings.ReplaceAll(sourceValue.(string), ",", ""), 64)
+				}
+			case "number":
+				if sourceValue != nil {
+					out[fieldName] = truncateWithPrecision(sourceValue.(string), 9)
+				} else {
+					out[fieldName] = sourceValue
 				}
 			default:
 				out[fieldName] = sourceValue
@@ -156,6 +169,23 @@ func ToGeoJSONPoint(v interface{}) (interface{}, error) {
 	// TODO: validate that this is a simple geo; Point, LineString, etc
 	if v == nil {
 		return nil, nil
+	}
+	switch m := v.(type) {
+	case string:
+		// "POINT (-73.941954 40.600372)"
+		if strings.HasPrefix(m, "POINT (") && strings.HasSuffix(m, ")") {
+			coord := m[7 : len(m)-1]
+			coords := strings.Split(coord, " ")
+			if len(coords) != 2 {
+				return nil, fmt.Errorf("ToGeoJSONPoint: invalid point %q", m)
+			}
+			p := map[string]interface{}{
+				"type":        "Point",
+				"coordinates": []interface{}{json.Number(coords[0]), json.Number(coords[1])},
+			}
+			b, err := json.Marshal(p)
+			return string(b), err
+		}
 	}
 	b, err := json.Marshal(v)
 	return string(b), err

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -113,6 +114,19 @@ func TransformDownload(w io.Writer, r io.Reader, s TableSchema, quiet bool, estR
 
 type ListRecord []interface{}
 
+func truncateWithPrecision(s string, p int) string {
+	// Find the position of the decimal point
+	if dotIndex := strings.Index(s, "."); dotIndex != -1 {
+		// Count the number of characters after the decimal point
+		precision := len(s) - dotIndex - 1
+		if precision > p {
+			return s[:len(s)-(precision-p)]
+		}
+		return s
+	}
+	return s
+}
+
 func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 	out := make(Record, len(l))
 	// log.Printf("%#v", l)
@@ -129,7 +143,7 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 			switch schema.SourceFieldType {
 			case "number":
 				if s, ok := sourceValue.(string); ok && s != "" {
-					out[fieldName] = json.Number(s)
+					out[fieldName] = json.Number(truncateWithPrecision(s, 9))
 				}
 			default:
 				out[fieldName] = sourceValue
