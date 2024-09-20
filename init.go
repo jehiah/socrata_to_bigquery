@@ -1,9 +1,11 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -23,6 +25,7 @@ func initDataset(args []string) {
 	fn := initFlagSet.String("filename", "", "defaults to ${NAME}-${ID}.toml")
 	bqProject := initFlagSet.String("project-id", "", "Google Cloud Project ID")
 	bqDataset := initFlagSet.String("bq-dataset", "", "BigQuery Dataset")
+	downloadFile := initFlagSet.String("download-file", "", "re-process existing download file (gzip supported)")
 	initFlagSet.Parse(args)
 
 	if *apiEndpoint == "" {
@@ -37,12 +40,43 @@ func initDataset(args []string) {
 		os.Exit(1)
 	}
 
-	sodareq := soda.NewGetRequest(*apiEndpoint, *token)
-	// ":*" includes metadata records :id, :created_at, :updated_at, :version
-	sodareq.Query.Select = []string{":*", "*"}
-	md, err := sodareq.Metadata.Get()
-	if err != nil {
-		log.Fatal(err)
+	var md *soda.Metadata
+	var examples []map[string]interface{}
+	var err error
+
+	if *downloadFile != "" {
+		var r io.ReadCloser
+		fmt.Printf("Opening %s\n", *downloadFile)
+		r, err = os.Open(*downloadFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if strings.HasSuffix(*downloadFile, ".gz") {
+			r, err = gzip.NewReader(r)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		var data DownloadFile
+		dec := json.NewDecoder(r)
+		if err = dec.Decode(&data); err != nil {
+			log.Fatal(err)
+		}
+		md = &data.Meta.Metadata
+		examples = data.ExampleRecords()
+
+	} else {
+		sodareq := soda.NewGetRequest(*apiEndpoint, *token)
+		// ":*" includes metadata records :id, :created_at, :updated_at, :version
+		sodareq.Query.Select = []string{":*", "*"}
+		md, err = sodareq.Metadata.Get()
+		if err != nil {
+			log.Fatal(err)
+		}
+		examples, err = FetchExampleRecords(*sodareq)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	fmt.Printf("Found Socrata Dataset: %s (%s) last modified %v\n", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
@@ -68,18 +102,10 @@ func initDataset(args []string) {
 	c.BigQuery.ProjectID = *bqProject
 	c.BigQuery.DatasetName = *bqDataset
 	encoder.Encode(c)
-	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, MustExampleRecords(*sodareq))})
+	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, ExampleRecords(examples))})
 }
 
-func MustExampleRecords(r soda.GetRequest) map[string]string {
-	d, err := ExampleRecords(r)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return d
-}
-
-func ExampleRecords(sr soda.GetRequest) (map[string]string, error) {
+func FetchExampleRecords(sr soda.GetRequest) ([]map[string]interface{}, error) {
 	r := &sr
 	r.Query.Limit = 10
 	fmt.Println("Fetching example records.")
@@ -95,6 +121,10 @@ func ExampleRecords(sr soda.GetRequest) (map[string]string, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
+	return data, nil
+}
+
+func ExampleRecords(data []map[string]interface{}) map[string]string {
 	buffer := make(map[string][]string)
 	for _, row := range data {
 		for k, v := range row {
@@ -125,7 +155,7 @@ func ExampleRecords(sr soda.GetRequest) (map[string]string, error) {
 	for k, v := range buffer {
 		out[k] = strings.Join(uniqExamples(v, 3), ", ")
 	}
-	return out, nil
+	return out
 }
 
 func uniqExamples(a []string, max int) []string {

@@ -11,6 +11,23 @@ import (
 	soda "github.com/SebastiaanKlippert/go-soda"
 )
 
+type DownloadFile struct {
+	Meta DownloadMeta `json:"meta"`
+	Data []ListRecord `json:"data"`
+}
+
+func (d DownloadFile) ExampleRecords() []map[string]interface{} {
+	var out []map[string]interface{}
+	for i := 0; i < 10 && i < len(d.Data); i++ {
+		row := make(map[string]interface{})
+		for j, v := range d.Data[i] {
+			row[d.Meta.Columns[j].FieldName] = v
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 // This is the "view" dict found in the download response format
 // i.e 'https://data.cityofnewyork.us/api/views/${ID}/rows.json?accessType=DOWNLOAD'
 type DownloadMeta struct {
