@@ -143,7 +143,7 @@ func TransformOneList(l ListRecord, s OrderedTableSchema) (Record, error) {
 			switch schema.SourceFieldType {
 			case "number":
 				if s, ok := sourceValue.(string); ok && s != "" {
-					out[fieldName] = json.Number(truncateWithPrecision(s, 9))
+					out[fieldName] = json.Number(truncateWithPrecision(s, bigquery.NumericScaleDigits))
 				}
 			default:
 				out[fieldName] = sourceValue
