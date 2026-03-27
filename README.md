@@ -20,9 +20,7 @@ go get github.com/jehiah/socrata_to_bigquery/...
 
 1. `socrata_to_bigquery init`
 
-2. `socrata_to_bigquery download`
-
-3. `socrata_to_bigquery sync`
+2. `socrata_to_bigquery sync`
 
 
 ## Documentation
@@ -76,17 +74,9 @@ Usage of socrata_to_bigquery init:
     	Socrata App Token (also src SOCRATA_APP_TOKEN env)
 ```
 
-### `download`
-
-Download does an initial copy from Socrata to Bigquery
-
-Usage: `socrata_to_bigquery download /path/to/config.yaml`
-
-i.e. `socrata_to_bigquery download open-parking-and-camera-violations-nc67-uf89.toml`
-
 ### `sync`
 
-Sync does a periodic copy of new records from Socrata to BigQuery copying only new records since the most recent record in BigQuery.
+Sync does a copy of new records from Socrata to BigQuery copying only new records since the most recent record in BigQuery.
 
 Usage: `socrata_to_bigquery sync /path/to/config.yaml`
 
