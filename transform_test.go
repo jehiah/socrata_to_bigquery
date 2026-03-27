@@ -66,7 +66,9 @@ func TestToGeoJSONPoint(t *testing.T) {
 	}
 	u := func(s string) interface{} {
 		var m interface{}
-		json.Unmarshal([]byte(s), &m)
+		if err := json.Unmarshal([]byte(s), &m); err != nil {
+			panic(err)
+		}
 		return m
 	}
 

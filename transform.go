@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -65,11 +64,22 @@ func Transform(w io.Writer, r io.Reader, s TableSchema, quiet bool, estRows uint
 	return rows, nil
 }
 
-func roundToPrecision(value float64, precision int) float64 {
-	// Multiply by 10^precision, round, and then divide by 10^precision
-	factor := math.Pow(10, float64(precision))
-	return math.Round(value*factor) / factor
+func truncateWithPrecision(s string, p int) string {
+	if dotIndex := strings.Index(s, "."); dotIndex != -1 {
+		precision := len(s) - dotIndex - 1
+		if precision > p {
+			return s[:len(s)-(precision-p)]
+		}
+		return s
+	}
+	return s
 }
+
+// func roundToPrecision(value float64, precision int) float64 {
+// 	// Multiply by 10^precision, round, and then divide by 10^precision
+// 	factor := math.Pow(10, float64(precision))
+// 	return math.Round(value*factor) / factor
+// }
 
 func TransformOne(m Record, s TableSchema) (Record, error) {
 	out := make(Record, len(m))

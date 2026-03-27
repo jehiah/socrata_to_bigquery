@@ -1,18 +1,15 @@
 package main
 
 import (
-	"compress/gzip"
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	soda "github.com/SebastiaanKlippert/go-soda"
 	toml "github.com/pelletier/go-toml"
 )
 
@@ -25,8 +22,9 @@ func initDataset(args []string) {
 	fn := initFlagSet.String("filename", "", "defaults to ${NAME}-${ID}.toml")
 	bqProject := initFlagSet.String("project-id", "", "Google Cloud Project ID")
 	bqDataset := initFlagSet.String("bq-dataset", "", "BigQuery Dataset")
-	downloadFile := initFlagSet.String("download-file", "", "re-process existing download file (gzip supported)")
-	initFlagSet.Parse(args)
+	if err := initFlagSet.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if *apiEndpoint == "" {
 		fmt.Fprintln(os.Stderr, "missing --api-endpoint")
@@ -40,53 +38,30 @@ func initDataset(args []string) {
 		os.Exit(1)
 	}
 
-	var md *soda.Metadata
-	var examples []map[string]interface{}
-	var err error
+	ctx := context.Background()
+	// Construct a ConfigFile just to use APIBase/DatasetID parsing
+	cf := ConfigFile{Config: Config{Dataset: *apiEndpoint}}
+	apiBase := cf.APIBase()
+	datasetID := cf.DatasetID()
 
-	if *downloadFile != "" {
-		var r io.ReadCloser
-		fmt.Printf("Opening %s\n", *downloadFile)
-		r, err = os.Open(*downloadFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if strings.HasSuffix(*downloadFile, ".gz") {
-			r, err = gzip.NewReader(r)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-		var data DownloadFile
-		dec := json.NewDecoder(r)
-		if err = dec.Decode(&data); err != nil {
-			log.Fatal(err)
-		}
-		md = &data.Meta.Metadata
-		examples = data.ExampleRecords()
-
-	} else {
-		sodareq := soda.NewGetRequest(*apiEndpoint, *token)
-		// ":*" includes metadata records :id, :created_at, :updated_at, :version
-		sodareq.Query.Select = []string{":*", "*"}
-		md, err = sodareq.Metadata.Get()
-		if err != nil {
-			log.Fatal(err)
-		}
-		examples, err = FetchExampleRecords(*sodareq)
-		if err != nil {
-			log.Fatal(err)
-		}
+	md, err := FetchMetadata(ctx, apiBase, datasetID, *token)
+	if err != nil {
+		log.Fatal(err)
 	}
+	fmt.Printf("Found Socrata Dataset: %s (%s) last modified %v\n", md.ID, md.Name, md.RowsUpdatedAtTime().Format("2006-01-02T15:04:05Z07:00"))
 
-	fmt.Printf("Found Socrata Dataset: %s (%s) last modified %v\n", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
 	if *debug {
 		LogSocrataSchema(md.Columns)
 	}
 
+	examples, err := FetchExampleRecords(ctx, apiBase, datasetID, *token)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	filename := *fn
 	if filename == "" {
-		filename = fmt.Sprintf("%s.toml", strings.Replace(ToTableName(md.ID, md.Name), "_", "-", -1))
+		filename = fmt.Sprintf("%s.toml", strings.ReplaceAll(ToTableName(md.ID, md.Name), "_", "-"))
 	}
 	if *dataDir != "" {
 		filename = filepath.Join(*dataDir, filename)
@@ -96,32 +71,27 @@ func initDataset(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	encoder := toml.NewEncoder(f)
 	c := NewConfig(*apiEndpoint, *md)
 	c.BigQuery.ProjectID = *bqProject
 	c.BigQuery.DatasetName = *bqDataset
-	encoder.Encode(c)
-	encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, ExampleRecords(examples))})
+	if err := encoder.Encode(c); err != nil {
+		log.Fatal(err)
+	}
+	if err := encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, ExampleRecords(examples))}); err != nil {
+		log.Fatal(err)
+	}
 }
 
-func FetchExampleRecords(sr soda.GetRequest) ([]map[string]interface{}, error) {
-	r := &sr
-	r.Query.Limit = 10
+func FetchExampleRecords(ctx context.Context, apiBase *url.URL, datasetID, token string) ([]map[string]interface{}, error) {
 	fmt.Println("Fetching example records.")
-	resp, err := r.Get()
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var data []map[string]interface{}
-	if err = json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
-	}
-	if len(data) == 0 {
-		return nil, nil
-	}
-	return data, nil
+	var examples []map[string]interface{}
+	err := StreamV3(ctx, apiBase, datasetID, "SELECT :*, * LIMIT 10", token, func(row Record) error {
+		examples = append(examples, map[string]interface{}(row))
+		return nil
+	})
+	return examples, err
 }
 
 func ExampleRecords(data []map[string]interface{}) map[string]string {
