@@ -1,50 +1,44 @@
 package main
 
 import (
+	"bufio"
 	"compress/gzip"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/storage"
-	soda "github.com/SebastiaanKlippert/go-soda"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 )
 
-func syncOne(configFile string, quiet bool, token string, pageSize uint64) {
+func syncOne(configFile string, quiet bool, token string) {
 	cf, err := LoadConfigFile(configFile)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// todo Validate
-	// bg-project-id, etc
-
-	sodareq := soda.NewGetRequest(cf.Dataset, token)
-	sodareq.Query.Select = []string{":*", "*"}
-	md, err := sodareq.Metadata.Get()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Syncronizing Socrata: %s (%s) (last modified %v)\n", md.ID, md.Name, time.Time(md.RowsUpdatedAt).Format(time.RFC3339))
-
-	// socrata count
-	sodareq.Query.Where = cf.BigQuery.WhereFilter
-	sodataCount, err := sodareq.Count()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Socrata Records: %d\n", sodataCount)
-
 	ctx := context.Background()
+	apiBase := cf.APIBase()
+	datasetID := cf.DatasetID()
+
+	md, err := FetchMetadata(ctx, apiBase, datasetID, token)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Synchronizing Socrata: %s (%s) (last modified %v)\n", md.ID, md.Name, md.RowsUpdatedAtTime().Format(time.RFC3339))
+
+	socrataCount, err := CountV3(ctx, apiBase, datasetID, cf.BigQuery.WhereFilter, token)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Socrata Records: %d\n", socrataCount)
+
 	bqclient, err := bigquery.NewClient(ctx, cf.BigQuery.ProjectID)
 	if err != nil {
 		log.Fatal(err)
@@ -52,7 +46,6 @@ func syncOne(configFile string, quiet bool, token string, pageSize uint64) {
 	dataset := bqclient.Dataset(cf.BigQuery.DatasetName)
 	dmd, err := dataset.Metadata(ctx)
 	if err != nil {
-		// TODO: dataset doesn't exist? require that first?
 		log.Fatalf("Error fetching BigQuery dataset %s.%s err %s", cf.BigQuery.ProjectID, cf.BigQuery.DatasetName, err)
 	}
 	fmt.Printf("BQ Dataset %s OK\n", dmd.FullID)
@@ -78,18 +71,16 @@ func syncOne(configFile string, quiet bool, token string, pageSize uint64) {
 		}
 	}
 	if tmd == nil {
-		log.Fatalf("Error fetching BigQuery Table %s.%s %s", dmd.FullID, md.ID, err)
+		log.Fatalf("Error fetching BigQuery Table %s.%s %s", dmd.FullID, datasetID, err)
 	}
 	fmt.Printf("BQ Table %s OK (last modified %s)\n", tmd.FullID, tmd.LastModifiedTime)
 
-	missing := uint64(sodataCount) - tmd.NumRows
 	fmt.Printf("BQ Records: %d\n", tmd.NumRows)
-	if sodataCount == 0 {
+	if socrataCount == 0 {
 		return
 	}
-	// Note: missing records could be from on_error=SKIP_ROW
-	// fmt.Printf("Missing records from BQ: %d\n", missing)
-	if missing == 0 {
+	missing := socrataCount - int64(tmd.NumRows)
+	if missing <= 0 {
 		fmt.Printf("0 out-of-sync records found\n")
 		fmt.Printf("Sync Complete\n")
 		return
@@ -126,7 +117,7 @@ func syncOne(configFile string, quiet bool, token string, pageSize uint64) {
 			if where == "" {
 				where = createdFilter
 			} else {
-				where = where + " and " + createdFilter
+				where = where + " AND " + createdFilter
 			}
 		}
 	}
@@ -136,112 +127,124 @@ func syncOne(configFile string, quiet bool, token string, pageSize uint64) {
 		log.Fatal(err)
 	}
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
-	throttle := NewConcurrentLimit(2)
-	var wg sync.WaitGroup
-	for n := uint64(0); n < missing; n += pageSize {
-		wg.Add(1)
-		n := n
-		go throttle.Run(func() {
-			remain := pageSize
-			if n+remain > missing {
-				remain = missing - n
-			}
-			for i := 0; i < 3; i++ {
-				err := CopyChunk(ctx, cf, token, where, n, remain, bkt, bqTable, quiet)
-				if errors.Is(err, io.EOF) {
-					log.Printf("%d-%d err %s on try %d.", n, n+remain, err, i)
-					continue
-				}
-				if err != nil {
-					log.Fatal(err)
-				}
-				break
-			}
-			wg.Done()
-		})
-	}
-	wg.Wait()
-	fmt.Printf("Sync Complete\n")
 
+	if err := streamAndLoad(ctx, cf, datasetID, where, token, bkt, bqTable, quiet, missing); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Sync Complete\n")
 }
 
-func CopyChunk(ctx context.Context, cf ConfigFile, token, where string, offset, limit uint64, bkt *storage.BucketHandle, bqTable *bigquery.Table, quiet bool) error {
-	// start socrata data stream
-	sodareq := soda.NewGetRequest(cf.Dataset, token)
-	sodareq.Query.Offset = uint(offset)
-	sodareq.Query.Limit = uint(limit)
-	sodareq.Query.Select = []string{":*", "*"}
-	sodareq.Query.Where = where
-	sodareq.Query.AddOrder(":id", false) // make paging stable. see https://dev.socrata.com/docs/paging.html
-	sodareq.Format = "json"
-	req, err := http.NewRequest("GET", sodareq.GetEndpoint(), nil)
-	if err != nil {
-		return err
+// estimate calculates the remaining rows and estimated time remaining based on the
+// count of rows processed, total missing rows, and elapsed time
+func estimate(count, missing int64, elapsed time.Duration) (int64, time.Duration) {
+	remainingRows := missing - count
+	if count > 0 && remainingRows > 0 {
+		avgTimePerRow := elapsed / time.Duration(count)
+		estimatedRemaining := time.Duration(remainingRows) * avgTimePerRow
+		return remainingRows, estimatedRemaining
 	}
-	req.URL.RawQuery = sodareq.URLValues().Encode()
-	req.Header.Set("X-App-Token", token)
-	fmt.Printf("> connecting to %s\n", req.URL)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("got unexpected response %d", resp.StatusCode)
+	return remainingRows, 0
+}
+
+func streamAndLoad(ctx context.Context, cf ConfigFile, datasetID, where, token string, bkt *storage.BucketHandle, bqTable *bigquery.Table, quiet bool, missing int64) error {
+	sql := "SELECT :*, *"
+	if where != "" {
+		sql += " WHERE " + where
 	}
 
-	// stream to a google storage file
-	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), cf.DatasetID()+"-"+fmt.Sprintf("%d", offset)+".json.gz"))
+	obj := bkt.Object(filepath.Join("socrata_to_bigquery", time.Now().Format("20060102-150405"), datasetID+".json.gz"))
 	fmt.Printf("> writing to %s/%s\n", cf.GSBucket(), obj.ObjectName())
 	w := obj.NewWriter(ctx)
-	w.ObjectAttrs.ContentType = "application/json"
-	w.ObjectAttrs.ContentEncoding = "gzip"
-	gw := gzip.NewWriter(w)
+	w.ContentType = "application/json"
+	w.ContentEncoding = "gzip"
+	bw := bufio.NewWriterSize(w, 5*1024*1024) // 5MB buffer
+	gw := gzip.NewWriter(bw)
+	enc := json.NewEncoder(gw)
+	enc.SetEscapeHTML(false)
 
-	rows, transformErr := Transform(gw, resp.Body, cf.Schema, quiet, limit)
-	if transformErr != nil {
-		log.Printf("transformErr: %s", transformErr)
+	var rows int64
+	start := time.Now()
+	out := make(chan Record, 100000)
+	wg, ctxg := errgroup.WithContext(ctx)
+	// gorotine for encoding and writing to GCS
+	wg.Go(func() error {
+		for row := range out {
+			if err := enc.Encode(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	streamErr := StreamV3(ctxg, cf.APIBase(), datasetID, sql, token, func(row Record) error {
+		mm, err := TransformOne(row, cf.Schema)
+		if err != nil {
+			return fmt.Errorf("row %d: %w", rows+1, err)
+		}
+		if mm != nil {
+			rows++
+			if !quiet && rows%100000 == 0 {
+				elapsed := time.Since(start)
+				remainingRows, estimatedRemaining := estimate(rows, missing, elapsed)
+				if remainingRows > 0 && estimatedRemaining > 0 {
+					log.Printf("processed %d rows (%s) - estimated remaining %d : %s", rows, elapsed.Truncate(time.Second), remainingRows, estimatedRemaining.Truncate(time.Second))
+				} else {
+					log.Printf("processed %d rows (%s)", rows, elapsed.Truncate(time.Second))
+				}
+			}
+			out <- mm
+		}
+		return nil
+	})
+	if streamErr != nil {
+		log.Printf("streamErr: %s", streamErr)
 	}
-	err = gw.Close()
-	if err != nil {
+
+	close(out)
+	if err := wg.Wait(); err != nil {
 		return err
 	}
-	err = w.Close()
-	if err != nil {
+	if err := gw.Close(); err != nil {
 		return err
 	}
-	resp.Body.Close()
-	if transformErr != nil {
-		return transformErr
+	if err := bw.Flush(); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	if streamErr != nil {
+		return streamErr
 	}
 
-	if rows != 0 {
-		fmt.Printf("Queued %d rows for BigQuery load\n", rows)
-		// load into bigquery
-		gcsRef := bigquery.NewGCSReference(fmt.Sprintf("%s/%s", cf.GSBucket(), obj.ObjectName()))
-		gcsRef.SourceFormat = bigquery.JSON
-
-		loader := bqTable.LoaderFrom(gcsRef)
-		loader.WriteDisposition = bigquery.WriteAppend
-
-		loadJob, err := loader.Run(ctx)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("BigQuery import running job %s\n", loadJob.ID())
-		status, err := loadJob.Wait(ctx)
-		fmt.Printf("BigQuery import job %s done\n", loadJob.ID())
-		if err != nil {
-			return err
-		}
-		if err = status.Err(); err != nil {
-			return err
-		}
-	} else {
+	if rows == 0 {
 		fmt.Printf("0 out-of-sync records found\n")
+		if err := obj.Delete(ctx); err != nil {
+			return err
+		}
+		return nil
 	}
 
-	// cleanup google storage
-	// log.Printf("removing temp file %s/%s", cf.GSBucket(), obj.ObjectName())
+	fmt.Printf("Queued %d rows for BigQuery load\n", rows)
+	gcsRef := bigquery.NewGCSReference(fmt.Sprintf("%s/%s", cf.GSBucket(), obj.ObjectName()))
+	gcsRef.SourceFormat = bigquery.JSON
+
+	loader := bqTable.LoaderFrom(gcsRef)
+	loader.WriteDisposition = bigquery.WriteAppend
+
+	loadJob, err := loader.Run(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("BigQuery import running job %s\n", loadJob.ID())
+	status, err := loadJob.Wait(ctx)
+	fmt.Printf("BigQuery import job %s done\n", loadJob.ID())
+	if err != nil {
+		return err
+	}
+	if err = status.Err(); err != nil {
+		return err
+	}
+
 	if err = obj.Delete(ctx); err != nil {
 		return err
 	}

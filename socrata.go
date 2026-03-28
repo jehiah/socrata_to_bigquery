@@ -1,13 +1,9 @@
 package main
 
-import (
-	"fmt"
+import "fmt"
 
-	soda "github.com/SebastiaanKlippert/go-soda"
-)
-
-func LogSocrataSchema(c []soda.Column) {
+func LogSocrataSchema(c []SocrataColumn) {
 	for i, cc := range c {
-		fmt.Printf("[%d] %q (%s) %s %#v\n", i, cc.FieldName, cc.DataTypeName, cc.Name, cc)
+		fmt.Printf("[%d] %q (%s) %s\n", i, cc.FieldName, cc.DataTypeName, cc.Name)
 	}
 }

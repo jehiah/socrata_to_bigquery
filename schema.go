@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"cloud.google.com/go/bigquery"
-	soda "github.com/SebastiaanKlippert/go-soda"
 	toml "github.com/pelletier/go-toml"
 )
 
@@ -31,64 +30,7 @@ type SchemaField struct {
 	ExampleValues   string             `commented:"true" toml:"example_values,omitempty"`
 }
 
-type OrderedSchemaField struct {
-	FieldName string
-	SchemaField
-}
-
 type TableSchema map[string]SchemaField
-type OrderedTableSchema []OrderedSchemaField
-
-func (ts TableSchema) ToOrdered(c []soda.Column) OrderedTableSchema {
-	var o []OrderedSchemaField
-	for _, cc := range c {
-		if cc.ID == -1 {
-			var target string
-			var targetType bigquery.FieldType
-			var sourceType string
-			switch cc.FieldName {
-			case ":sid":
-				target = "_id"
-				targetType = bigquery.StringFieldType
-				sourceType = "text"
-			case ":created_at":
-				target = "_created_at"
-				targetType = bigquery.TimestampFieldType
-				sourceType = "json.Number"
-			case ":updated_at":
-				target = "_updated_at"
-				targetType = bigquery.TimestampFieldType
-				sourceType = "json.Number"
-			}
-			o = append(o, OrderedSchemaField{
-				FieldName: target,
-				SchemaField: SchemaField{
-					SourceField:     cc.FieldName,
-					SourceFieldType: sourceType,
-					Type:            targetType,
-				},
-			})
-
-			continue
-		}
-		var found bool
-		for fn, ss := range ts {
-			if ss.SourceField == cc.FieldName {
-				o = append(o, OrderedSchemaField{
-					FieldName:   fn,
-					SchemaField: ss,
-				})
-				found = true
-				break
-			}
-		}
-		if !found {
-			// marker to skip transform field
-			o = append(o, OrderedSchemaField{})
-		}
-	}
-	return o
-}
 
 type Config struct {
 	Dataset                 string `comment:"The URL to the Socrata dataset"`
@@ -137,7 +79,7 @@ func LoadConfigFile(name string) (ConfigFile, error) {
 	if err != nil {
 		return cf, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	err = toml.NewDecoder(f).Decode(&cf)
 	return cf, err
 }
@@ -147,9 +89,9 @@ func ToTableName(id, name string) string {
 	return r.Replace(strings.ToLower(name) + "-" + id)
 }
 
-func NewConfig(url string, md soda.Metadata) Config {
+func NewConfig(datasetURL string, md SocrataMetadata) Config {
 	return Config{
-		Dataset: url,
+		Dataset: datasetURL,
 		BigQuery: BigQuery{
 			TableName:   ToTableName(md.ID, md.Name),
 			Description: strings.TrimSpace(md.Name),
@@ -182,7 +124,7 @@ func GuessBQType(t, name string) (bigquery.FieldType, string) {
 	panic(fmt.Sprintf("unknown type %q", t))
 }
 
-func NewSchema(s soda.Metadata, examples map[string]string) TableSchema {
+func NewSchema(s SocrataMetadata, examples map[string]string) TableSchema {
 	t := TableSchema{
 		"_id": SchemaField{
 			SourceField:   ":id",

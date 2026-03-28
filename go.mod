@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	cloud.google.com/go/bigquery v1.74.0
 	cloud.google.com/go/storage v1.61.3
-	github.com/SebastiaanKlippert/go-soda v1.0.1
 	github.com/pelletier/go-toml v1.9.5
 	google.golang.org/api v0.272.0
 )
