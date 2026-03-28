@@ -39,6 +39,8 @@ This config file defines all fields that will be loaded to BigQuery, and the tar
 
 For example, this `issue_date` is a `"text"` format in Socrata but it will be parsed using the Go format string `"01/02/2006"` and stored in a `DATE` column. `on_error = "SKIP_ROW"` indicates that any rows that do not meet this date format will be skipped.
 
+To enable table time partitioning, set `time_partition` on exactly one required schema field with `bigquery_type = "DATE"` or `"TIMESTAMP"`. Supported values are `HOUR`, `DAY`, `MONTH`, and `YEAR`.
+
 ```
   [schema.issue_date]
     bigquery_type = "DATE"
@@ -53,6 +55,9 @@ For example, this `issue_date` is a `"text"` format in Socrata but it will be pa
 
     # the time.Parse format string
     time_format = "01/02/2006"
+
+    # HOUR | DAY | MONTH | YEAR
+    time_partition = "DAY"
 ```
 
 

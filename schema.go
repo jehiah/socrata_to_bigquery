@@ -18,6 +18,15 @@ const (
 	RaiseError OnError = "ERROR"
 )
 
+type TimePartition string
+
+const (
+	TimePartitionHour  TimePartition = "HOUR"
+	TimePartitionDay   TimePartition = "DAY"
+	TimePartitionMonth TimePartition = "MONTH"
+	TimePartitionYear  TimePartition = "YEAR"
+)
+
 // SchemaField represents a toml record which configures how data will be transformed from Socrata to BigQuery
 type SchemaField struct {
 	SourceField     string             `toml:"source_field"`
@@ -25,6 +34,7 @@ type SchemaField struct {
 	Description     string             `toml:"description,omitempty"`
 	Type            bigquery.FieldType `toml:"bigquery_type"`
 	TimeFormat      string             `comment:"the time.Parse format string" toml:"time_format,omitempty"`
+	TimePartition   TimePartition      `comment:"HOUR | DAY | MONTH | YEAR" toml:"time_partition,omitempty"`
 	Required        bool               `toml:"required"`
 	OnError         OnError            `comment:"SKIP_VALUE | SKIP_ROW | ERROR " toml:"on_error,omitempty"`
 	ExampleValues   string             `commented:"true" toml:"example_values,omitempty"`
@@ -190,4 +200,66 @@ func (t TableSchema) BigQuerySchema() bigquery.Schema {
 		})
 	}
 	return s
+}
+
+func parseTimePartitioningType(tp TimePartition) (bigquery.TimePartitioningType, error) {
+	switch tp {
+	case TimePartitionHour:
+		return bigquery.HourPartitioningType, nil
+	case TimePartitionDay:
+		return bigquery.DayPartitioningType, nil
+	case TimePartitionMonth:
+		return bigquery.MonthPartitioningType, nil
+	case TimePartitionYear:
+		return bigquery.YearPartitioningType, nil
+	default:
+		return "", fmt.Errorf("must be one of HOUR, DAY, MONTH, YEAR")
+	}
+}
+
+// TimePartitioning builds BigQuery partition configuration from schema settings.
+// It validates that only one partition field is set, and that field is REQUIRED
+// and typed DATE or TIMESTAMP.
+func (t TableSchema) TimePartitioning() (*bigquery.TimePartitioning, error) {
+	var name string
+	var field SchemaField
+	for fieldName, schemaField := range t {
+		if schemaField.TimePartition == "" {
+			continue
+		}
+		if name != "" {
+			return nil, fmt.Errorf("multiple schema fields have time_partition configured: %q and %q", name, fieldName)
+		}
+		name = fieldName
+		field = schemaField
+	}
+
+	if name == "" {
+		return nil, nil
+	}
+
+	if !field.Required {
+		return nil, fmt.Errorf("time_partition field %q must be required", name)
+	}
+	if field.Type != bigquery.DateFieldType && field.Type != bigquery.TimestampFieldType {
+		return nil, fmt.Errorf("time_partition field %q must be DATE or TIMESTAMP (got %s)", name, field.Type)
+	}
+
+	typeValue, err := parseTimePartitioningType(field.TimePartition)
+	if err != nil {
+		return nil, fmt.Errorf("time_partition field %q %w", name, err)
+	}
+
+	return &bigquery.TimePartitioning{
+		Type:  typeValue,
+		Field: name,
+	}, nil
+}
+
+func (t TableSchema) PartitionWhereClause() string {
+	tp, err := t.TimePartitioning()
+	if err != nil || tp == nil {
+		return ""
+	}
+	return fmt.Sprintf("WHERE %s IS NOT NULL", bqIdentifier(tp.Field))
 }
