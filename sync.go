@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -16,6 +17,10 @@ import (
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 )
+
+func bqIdentifier(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "") + "`"
+}
 
 func syncOne(configFile string, quiet bool, token string) {
 	cf, err := LoadConfigFile(configFile)
@@ -39,6 +44,11 @@ func syncOne(configFile string, quiet bool, token string) {
 	}
 	fmt.Printf("Socrata Records: %d\n", socrataCount)
 
+	timePartitioning, err := cf.Schema.TimePartitioning()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	bqclient, err := bigquery.NewClient(ctx, cf.BigQuery.ProjectID)
 	if err != nil {
 		log.Fatal(err)
@@ -57,9 +67,10 @@ func syncOne(configFile string, quiet bool, token string) {
 			if e.Code == 404 {
 				fmt.Printf("Auto-creating table %s\n", e.Message)
 				if err := bqTable.Create(ctx, &bigquery.TableMetadata{
-					Name:        cf.BigQuery.TableName,
-					Description: cf.BigQuery.Description,
-					Schema:      cf.Schema.BigQuerySchema(),
+					Name:             cf.BigQuery.TableName,
+					Description:      cf.BigQuery.Description,
+					Schema:           cf.Schema.BigQuerySchema(),
+					TimePartitioning: timePartitioning,
 				}); err != nil {
 					log.Fatal(err)
 				}
@@ -88,8 +99,8 @@ func syncOne(configFile string, quiet bool, token string) {
 
 	where := cf.BigQuery.WhereFilter
 	if tmd.NumRows > 0 {
-		// automatically generate a where clause picking up after the last _created_at
-		q := bqclient.Query(`SELECT max(_created_at) as created FROM ` + cf.BigQuery.SQLTableName())
+		// automatically generate a where clause picking up after the last incremental cursor value
+		q := bqclient.Query(fmt.Sprintf("SELECT max(_created_at) as created FROM %s %s", cf.BigQuery.SQLTableName(), cf.Schema.PartitionWhereClause()))
 		it, err := q.Read(ctx)
 		if err != nil {
 			log.Fatal(err)
