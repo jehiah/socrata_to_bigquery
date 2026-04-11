@@ -14,6 +14,7 @@ func usage() {
 	fmt.Println("Commands:")
 	fmt.Println(" - init")
 	fmt.Println(" - sync")
+	fmt.Println(" - archive")
 }
 
 func main() {
@@ -29,6 +30,8 @@ func main() {
 		initDataset(os.Args[2:])
 	case "sync":
 		syncCmd(os.Args[2:])
+	case "archive":
+		archiveCmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)

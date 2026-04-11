@@ -124,6 +124,16 @@ func CountV3(ctx context.Context, apiBase *url.URL, datasetID, where, token stri
 	return strconv.ParseInt(results[0].Count, 10, 64)
 }
 
+// StreamRawV3 executes a v3 SQL query and returns the raw response body.
+// The caller is responsible for closing the returned ReadCloser.
+func StreamRawV3(ctx context.Context, apiBase *url.URL, datasetID, sql, token string) (io.ReadCloser, error) {
+	resp, err := v3Post(ctx, apiBase, datasetID, sql, token)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
+}
+
 // StreamV3 executes a v3 SQL query and calls handle for each row.
 // The SQL should include SELECT, optional WHERE, and optional LIMIT clauses.
 func StreamV3(ctx context.Context, apiBase *url.URL, datasetID, sql, token string, handle func(Record) error) error {
@@ -132,7 +142,7 @@ func StreamV3(ctx context.Context, apiBase *url.URL, datasetID, sql, token strin
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	reader := bufio.NewReaderSize(resp.Body, 5*1024*1024) // 5MB buffer
+	reader := bufio.NewReaderSize(resp.Body, 1*1024*1024) // 1MB buffer
 
 	dec := json.NewDecoder(reader)
 	startToken, err := dec.Token()
