@@ -19,6 +19,7 @@ func archiveCmd(args []string) {
 	flagSet := flag.NewFlagSet(fmt.Sprintf("%s archive", os.Args[0]), flag.ExitOnError)
 	quiet := flagSet.Bool("quiet", false, "disable progress output")
 	token := flagSet.String("socrata-app-token", "", "Socrata App Token (also src SOCRATA_APP_TOKEN env)")
+	localDir := flagSet.String("local-dir", "", "directory prefix to write archives to (instead of GCS)")
 	if err := flagSet.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -35,11 +36,11 @@ func archiveCmd(args []string) {
 		os.Exit(1)
 	}
 	for _, configFile := range flagSet.Args() {
-		archiveOne(configFile, *quiet, *token)
+		archiveOne(configFile, *quiet, *token, *localDir)
 	}
 }
 
-func archiveOne(configFile string, quiet bool, token string) {
+func archiveOne(configFile string, quiet bool, token, localDir string) {
 	cf, err := LoadConfigFile(configFile)
 	if err != nil {
 		log.Fatal(err)
@@ -74,17 +75,33 @@ func archiveOne(configFile string, quiet bool, token string) {
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
 	tableName := ToTableName(datasetID, md.Name)
 	objPath := filepath.Join("socrata_archive", tableName, time.Now().Format("20060102-150405")+".json.gz")
-	obj := bkt.Object(objPath)
-
-	fmt.Printf("> writing to %s/%s\n", cf.GSBucket(), obj.ObjectName())
-
-	w := obj.NewWriter(ctx)
-	w.ContentType = "application/json"
-	w.ContentEncoding = "gzip"
-	w.PredefinedACL = "publicRead"
+	var w io.WriteCloser
+	var innerWriter io.Writer
+	var obj *storage.ObjectHandle
+	if localDir != "" {
+		localPath := filepath.Join(localDir, objPath)
+		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+			log.Fatal(err)
+		}
+		f, err := os.Create(localPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		innerWriter = f
+		w = f
+		fmt.Printf("> writing to %s\n", localPath)
+	} else {
+		obj = bkt.Object(objPath)
+		fmt.Printf("> writing to %s/%s\n", cf.GSBucket(), obj.ObjectName())
+		sw := obj.NewWriter(ctx)
+		sw.ContentType = "application/json"
+		sw.ContentEncoding = "gzip"
+		sw.PredefinedACL = "publicRead"
+		innerWriter = sw
+		w = sw
+	}
 
 	var pw *ProgressWriter
-	var innerWriter io.Writer = w
 	if !quiet {
 		pw = NewProgressWriter(w, time.Minute)
 		innerWriter = pw
@@ -130,6 +147,10 @@ func archiveOne(configFile string, quiet bool, token string) {
 	}
 	fmt.Printf("Archive complete: %s raw -> %s compressed in %s\n",
 		humanBytes(written), humanBytes(compressedSize), elapsed)
-	fmt.Printf("GCS: %s/%s\n", cf.GSBucket(), obj.ObjectName())
-	fmt.Printf("URL: https://storage.googleapis.com/%s/%s\n", cf.GoogleStorageBucketName, obj.ObjectName())
+	if obj != nil {
+		fmt.Printf("GCS: %s/%s\n", cf.GSBucket(), obj.ObjectName())
+		fmt.Printf("URL: https://storage.googleapis.com/%s/%s\n", cf.GoogleStorageBucketName, obj.ObjectName())
+	} else {
+		fmt.Printf("Local file: %s\n", filepath.Join(localDir, objPath))
+	}
 }
