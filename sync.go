@@ -49,6 +49,11 @@ func syncOne(configFile string, quiet bool, token string) {
 		log.Fatal(err)
 	}
 
+	clustering, err := cf.Schema.Clustering()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	bqclient, err := bigquery.NewClient(ctx, cf.BigQuery.ProjectID)
 	if err != nil {
 		log.Fatal(err)
@@ -71,6 +76,7 @@ func syncOne(configFile string, quiet bool, token string) {
 					Description:      cf.BigQuery.Description,
 					Schema:           cf.Schema.BigQuerySchema(),
 					TimePartitioning: timePartitioning,
+					Clustering:       clustering,
 				}); err != nil {
 					log.Fatal(err)
 				}

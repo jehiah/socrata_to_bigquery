@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
@@ -35,6 +36,7 @@ type SchemaField struct {
 	Type            bigquery.FieldType `toml:"bigquery_type"`
 	TimeFormat      string             `comment:"the time.Parse format string" toml:"time_format,omitempty"`
 	TimePartition   TimePartition      `comment:"HOUR | DAY | MONTH | YEAR" toml:"time_partition,omitempty"`
+	Cluster         int                `comment:"1-4 sets clustering column order (up to 4 columns)" toml:"cluster,omitempty"`
 	Required        bool               `toml:"required"`
 	OnError         OnError            `comment:"SKIP_VALUE | SKIP_ROW | ERROR " toml:"on_error,omitempty"`
 	ExampleValues   string             `commented:"true" toml:"example_values,omitempty"`
@@ -241,8 +243,8 @@ func (t TableSchema) TimePartitioning() (*bigquery.TimePartitioning, error) {
 	if !field.Required {
 		return nil, fmt.Errorf("time_partition field %q must be required", name)
 	}
-	if field.Type != bigquery.DateFieldType && field.Type != bigquery.TimestampFieldType {
-		return nil, fmt.Errorf("time_partition field %q must be DATE or TIMESTAMP (got %s)", name, field.Type)
+	if field.Type != bigquery.DateFieldType && field.Type != bigquery.TimestampFieldType && field.Type != bigquery.DateTimeFieldType {
+		return nil, fmt.Errorf("time_partition field %q must be DATE, DATETIME, or TIMESTAMP (got %s)", name, field.Type)
 	}
 
 	typeValue, err := parseTimePartitioningType(field.TimePartition)
@@ -262,4 +264,61 @@ func (t TableSchema) PartitionWhereClause() string {
 		return ""
 	}
 	return fmt.Sprintf("WHERE %s IS NOT NULL", bqIdentifier(tp.Field))
+}
+
+// maxClusteringFields is the maximum number of columns BigQuery allows for clustering.
+const maxClusteringFields = 4
+
+// clusterableFieldTypes are the bigquery.FieldType values BigQuery allows as clustering columns.
+// See https://cloud.google.com/bigquery/docs/clustered-tables#cluster_column_types
+var clusterableFieldTypes = map[bigquery.FieldType]bool{
+	bigquery.BigNumericFieldType: true,
+	bigquery.BooleanFieldType:    true,
+	bigquery.DateFieldType:       true,
+	bigquery.DateTimeFieldType:   true,
+	bigquery.GeographyFieldType:  true,
+	bigquery.IntegerFieldType:    true,
+	bigquery.NumericFieldType:    true,
+	bigquery.RangeFieldType:      true,
+	bigquery.StringFieldType:     true,
+	bigquery.TimestampFieldType:  true,
+}
+
+// Clustering builds BigQuery clustering configuration from schema settings.
+// Fields are ordered by their `cluster` value (1-4); at most maxClusteringFields fields may be configured.
+func (t TableSchema) Clustering() (*bigquery.Clustering, error) {
+	type clusterField struct {
+		order int
+		name  string
+	}
+	var fields []clusterField
+	seen := make(map[int]string)
+	for name, field := range t {
+		if field.Cluster == 0 {
+			continue
+		}
+		if field.Cluster < 1 || field.Cluster > maxClusteringFields {
+			return nil, fmt.Errorf("cluster field %q must have cluster between 1 and %d (got %d)", name, maxClusteringFields, field.Cluster)
+		}
+		if existing, ok := seen[field.Cluster]; ok {
+			return nil, fmt.Errorf("multiple schema fields have cluster %d configured: %q and %q", field.Cluster, existing, name)
+		}
+		if !clusterableFieldTypes[field.Type] {
+			return nil, fmt.Errorf("cluster field %q has unsupported bigquery_type %s", name, field.Type)
+		}
+		seen[field.Cluster] = name
+		fields = append(fields, clusterField{order: field.Cluster, name: name})
+	}
+
+	if len(fields) == 0 {
+		return nil, nil
+	}
+
+	sort.Slice(fields, func(i, j int) bool { return fields[i].order < fields[j].order })
+
+	c := &bigquery.Clustering{}
+	for _, f := range fields {
+		c.Fields = append(c.Fields, f.name)
+	}
+	return c, nil
 }
