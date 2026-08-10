@@ -39,7 +39,9 @@ This config file defines all fields that will be loaded to BigQuery, and the tar
 
 For example, this `issue_date` is a `"text"` format in Socrata but it will be parsed using the Go format string `"01/02/2006"` and stored in a `DATE` column. `on_error = "SKIP_ROW"` indicates that any rows that do not meet this date format will be skipped.
 
-To enable table time partitioning, set `time_partition` on exactly one required schema field with `bigquery_type = "DATE"` or `"TIMESTAMP"`. Supported values are `HOUR`, `DAY`, `MONTH`, and `YEAR`.
+To enable table time partitioning, set `time_partition` on exactly one required schema field with `bigquery_type = "DATE"`, `"DATETIME"`, or `"TIMESTAMP"`. Supported values are `HOUR`, `DAY`, `MONTH`, and `YEAR`.
+
+To enable table clustering, set `cluster` to a value from `1` to `4` on up to four schema fields to define their clustering column order. Supported `bigquery_type` values are `BIGNUMERIC`, `BOOLEAN`, `DATE`, `DATETIME`, `GEOGRAPHY`, `INTEGER`, `NUMERIC`, `RANGE`, `STRING`, and `TIMESTAMP`. See [BigQuery clustered tables](https://docs.cloud.google.com/bigquery/docs/clustered-tables).
 
 ```
   [schema.issue_date]
@@ -58,6 +60,15 @@ To enable table time partitioning, set `time_partition` on exactly one required 
 
     # HOUR | DAY | MONTH | YEAR
     time_partition = "DAY"
+
+  [schema.borough]
+    bigquery_type = "STRING"
+    description = "Borough"
+    required = false
+    source_field = "borough"
+
+    # 1-4 sets clustering column order (up to 4 columns)
+    cluster = 1
 ```
 
 

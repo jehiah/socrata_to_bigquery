@@ -57,6 +57,31 @@ func TestTimePartitioning_ValidDate(t *testing.T) {
 	}
 }
 
+func TestTimePartitioning_ValidDateTime(t *testing.T) {
+	ts := TableSchema{
+		"issue_datetime": {
+			SourceField:   "issue_datetime",
+			Type:          bigquery.DateTimeFieldType,
+			Required:      true,
+			TimePartition: TimePartitionYear,
+		},
+	}
+
+	tp, err := ts.TimePartitioning()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tp == nil {
+		t.Fatal("expected partitioning config")
+	}
+	if tp.Field != "issue_datetime" {
+		t.Fatalf("unexpected field %q", tp.Field)
+	}
+	if tp.Type != bigquery.YearPartitioningType {
+		t.Fatalf("unexpected type %q", tp.Type)
+	}
+}
+
 func TestTimePartitioning_NoneConfigured(t *testing.T) {
 	ts := TableSchema{
 		"_created_at": {
@@ -103,7 +128,7 @@ func TestTimePartitioning_Invalid(t *testing.T) {
 					TimePartition: TimePartitionDay,
 				},
 			},
-			errLike: "must be DATE or TIMESTAMP",
+			errLike: "must be DATE, DATETIME, or TIMESTAMP",
 		},
 		{
 			name: "invalid partition type",

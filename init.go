@@ -79,10 +79,25 @@ func initDataset(args []string) {
 	if err := encoder.Encode(c); err != nil {
 		log.Fatal(err)
 	}
+	if _, err := f.WriteString(schemaDocstring); err != nil {
+		log.Fatal(err)
+	}
 	if err := encoder.Encode(map[string]TableSchema{"schema": NewSchema(*md, ExampleRecords(examples))}); err != nil {
 		log.Fatal(err)
 	}
 }
+
+// schemaDocstring documents how to configure time partitioning and clustering, written
+// ahead of the [schema.*] tables in generated config files.
+const schemaDocstring = `
+# To enable table time partitioning, set time_partition on exactly one required schema field
+# with bigquery_type = "DATE", "DATETIME", or "TIMESTAMP". Supported values are HOUR, DAY, MONTH, and YEAR.
+#
+# To enable table clustering, set cluster to a value from 1 to 4 on up to four schema fields to
+# define their clustering column order. Supported bigquery_type values are BIGNUMERIC, BOOLEAN,
+# DATE, DATETIME, GEOGRAPHY, INTEGER, NUMERIC, RANGE, STRING, and TIMESTAMP.
+# See https://docs.cloud.google.com/bigquery/docs/clustered-tables
+`
 
 func FetchExampleRecords(ctx context.Context, apiBase *url.URL, datasetID, token string) ([]map[string]interface{}, error) {
 	fmt.Println("Fetching example records.")
