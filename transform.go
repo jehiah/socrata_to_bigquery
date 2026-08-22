@@ -105,14 +105,13 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 		case bigquery.StringFieldType:
 			switch schema.SourceFieldType {
 			case "url":
-				out[fieldName] = sourceValue.(map[string]interface{})["url"]
+				if m, ok := sourceValue.(map[string]interface{}); ok {
+					out[fieldName] = m["url"]
+				} else {
+					out[fieldName] = nil
+				}
 			case "text", "":
 				out[fieldName] = sourceValue
-				if schema.Required {
-					if sv, ok := sourceValue.(string); ok && sv == "" || sourceValue == nil {
-						err = fmt.Errorf("missing required field %q", fieldName)
-					}
-				}
 			default:
 				return nil, fmt.Errorf("unhandled conversion from %q to %q for field %s", schema.SourceFieldType, schema.Type, fieldName)
 			}
@@ -128,28 +127,28 @@ func TransformOne(m Record, s TableSchema) (Record, error) {
 			}
 		case bigquery.DateFieldType:
 			if sourceValue != nil {
-				var v interface{}
-				v, err = ToDate(schema.TimeFormat, sourceValue.(string))
-				out[fieldName] = v
-				if schema.Required && v == nil && err == nil {
-					err = fmt.Errorf("missing required field %q", fieldName)
-				}
-			} else if schema.Required {
-				err = fmt.Errorf("missing required field %q", fieldName)
+				out[fieldName], err = ToDate(schema.TimeFormat, sourceValue.(string))
 			}
 		case bigquery.TimeFieldType:
 			if sourceValue != nil {
 				out[fieldName], err = ToTime(schema.TimeFormat, sourceValue.(string))
-			} else if schema.Required {
-				err = fmt.Errorf("missing required field %q", fieldName)
 			}
 		case bigquery.TimestampFieldType, bigquery.DateTimeFieldType:
 			out[fieldName] = sourceValue
 			// TODO: improve conversion
 		case bigquery.BooleanFieldType:
-			out[fieldName] = sourceValue.(bool)
+			if b, ok := sourceValue.(bool); ok {
+				out[fieldName] = b
+			} else {
+				out[fieldName] = nil
+			}
 		default:
 			return nil, fmt.Errorf("unhandled BigQuery type %q for field %q value %T %#v", schema.Type, fieldName, sourceValue, sourceValue)
+		}
+		if err == nil && schema.Required {
+			if v := out[fieldName]; v == nil || v == "" {
+				err = fmt.Errorf("missing required field %q", fieldName)
+			}
 		}
 		if err != nil {
 			switch schema.OnError {
