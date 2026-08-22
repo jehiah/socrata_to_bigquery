@@ -143,6 +143,9 @@ func syncOne(configFile string, quiet bool, token string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if cf.GoogleStorageBucketName == "" {
+		log.Fatal("Google Storage bucket name is not specified")
+	}
 	bkt := client.Bucket(cf.GoogleStorageBucketName)
 
 	if err := streamAndLoad(ctx, cf, datasetID, where, token, bkt, bqTable, quiet, missing); err != nil {
