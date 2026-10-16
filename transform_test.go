@@ -4,7 +4,82 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"cloud.google.com/go/bigquery"
 )
+
+// TestTransformOneRequired checks that every supported
+// (source_field_type, bigquery_type) pair audits the required state of a value.
+func TestTransformOneRequired(t *testing.T) {
+	type testCase struct {
+		sourceFieldType string
+		bqType          bigquery.FieldType
+		timeFormat      string
+		valid           interface{}
+		missing         []interface{}
+	}
+	tests := []testCase{
+		{"text", bigquery.NumericFieldType, "", "1,234.5", []interface{}{nil, ""}},
+		{"text", bigquery.FloatFieldType, "", "1,234.5", []interface{}{nil, ""}},
+		{"number", bigquery.NumericFieldType, "", "1.234", []interface{}{nil}},
+		{"number", bigquery.FloatFieldType, "", "1.234", []interface{}{nil}},
+		{"", bigquery.NumericFieldType, "", json.Number("1.234"), []interface{}{nil}},
+		{"", bigquery.FloatFieldType, "", json.Number("1.234"), []interface{}{nil}},
+		{"url", bigquery.StringFieldType, "", map[string]interface{}{"url": "http://example.com/"}, []interface{}{nil, map[string]interface{}{}, map[string]interface{}{"url": ""}}},
+		{"text", bigquery.StringFieldType, "", "abc", []interface{}{nil, ""}},
+		{"", bigquery.StringFieldType, "", "abc", []interface{}{nil, ""}},
+		{"point", bigquery.GeographyFieldType, "", "POINT (-73.921794 40.610106)", []interface{}{nil}},
+		{"location", bigquery.GeographyFieldType, "", map[string]interface{}{"latitude": "40.610106", "longitude": "-73.921794"}, []interface{}{nil, map[string]interface{}{}}},
+		{"text", bigquery.DateFieldType, "2006/01/02", "2019/02/28", []interface{}{nil, ""}},
+		{"text", bigquery.TimeFieldType, "15:04", "10:01", []interface{}{nil, ""}},
+		{"text", bigquery.TimestampFieldType, "", "2019-02-28T00:00:00.000", []interface{}{nil, ""}},
+		{"text", bigquery.DateTimeFieldType, "", "2019-02-28T00:00:00.000", []interface{}{nil, ""}},
+		{"checkbox", bigquery.BooleanFieldType, "", true, []interface{}{nil, ""}},
+	}
+	for _, tc := range tests {
+		tc := tc
+		schema := func(required bool) TableSchema {
+			return TableSchema{"a": SchemaField{
+				SourceField:     "a",
+				SourceFieldType: tc.sourceFieldType,
+				Type:            tc.bqType,
+				TimeFormat:      tc.timeFormat,
+				Required:        required,
+				OnError:         RaiseError,
+			}}
+		}
+		t.Run(fmt.Sprintf("%s_to_%s", tc.sourceFieldType, tc.bqType), func(t *testing.T) {
+			t.Run("valid", func(t *testing.T) {
+				got, err := TransformOne(Record{"a": tc.valid}, schema(true))
+				if err != nil {
+					t.Fatalf("unexpected error %s", err)
+				}
+				if v := got["a"]; v == nil || v == "" {
+					t.Fatalf("expected a value got %#v", v)
+				}
+			})
+			for i, missing := range tc.missing {
+				t.Run(fmt.Sprintf("missing_%d", i), func(t *testing.T) {
+					_, err := TransformOne(Record{"a": missing}, schema(true))
+					if err == nil {
+						t.Fatalf("expected error for %#v", missing)
+					}
+				})
+				t.Run(fmt.Sprintf("not_required_%d", i), func(t *testing.T) {
+					got, err := TransformOne(Record{"a": missing}, schema(false))
+					if err != nil {
+						// values that are invalid (not merely absent) still error
+						t.Logf("value %#v errored: %s", missing, err)
+						return
+					}
+					if v := got["a"]; v != nil && v != "" && v != false {
+						t.Fatalf("expected empty value got %#v", v)
+					}
+				})
+			}
+		})
+	}
+}
 
 // func TestTransformOne(t *testing.T) {
 // 	type testCase struct {
